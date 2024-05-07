@@ -11,8 +11,8 @@ max_len: 1536
 batch_size: 8
 num_workers: 16
 lr: 1e-5
-epochs: 3
+epochs: 5
 scheduler: linear
 warmup_steps: 0.0
-model_dir: /home/mithil/PycharmProjects/lmsys-scoring/models/deberta-v3-xsmall-baseline
+model_dir: /home/mithil/PycharmProjects/lmsys-scoring/models/deberta-v3-xsmall-baseline-added-token
 num_classes : 3

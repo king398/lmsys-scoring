@@ -40,7 +40,8 @@ def train_fn(
 
         accelerator.log(
             {f'fold_{fold}/train_loss': loss.item(),
-             f'fold_{fold}/train_step': (len(train_loader) * epoch) + i})
+             f'fold_{fold}/train_step': (len(train_loader) * epoch) + i,
+             f'fold_{fold}/lr': optimizer.param_groups[0]['lr']})
 
 
 def valid_fn(
@@ -68,3 +69,25 @@ def valid_fn(
     accelerator.log({f'fold_{fold}/valid_loss': total_loss / len(valid_loader),
                      f'fold_{fold}/epoch': epoch})
     return total_loss / len(valid_loader)
+
+
+def oof_fn(
+        oof_loader,
+        model, device):
+    model.eval()
+    predictions = []
+    targets = []
+    stream = tqdm(oof_loader)
+    for i, batch in enumerate(stream):
+        target = batch.pop('targets')
+        for key, value in batch.items():
+            batch[key] = value.to(device)
+        with torch.no_grad():
+            output = model(batch).softmax(dim=1)
+        predictions.append(output)
+        targets.append(target)
+
+    predictions = torch.cat(predictions, dim=0).cpu().detach().numpy()
+    targets = torch.cat(targets, dim=0).cpu().detach().numpy()
+
+    return predictions, targets

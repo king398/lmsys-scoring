@@ -33,12 +33,16 @@ def main(cfg):
         train_df = df[df['fold'] != i].reset_index(drop=True)
         valid_df = df[df['fold'] == i].reset_index(drop=True)
         tokenizer = AutoTokenizer.from_pretrained(cfg['model_name'])
+        tokenizer.add_tokens([AddedToken("<prompt>"), AddedToken("<response_a>"),
+                              AddedToken("<response_b>")])
         train_dataset = WinnerDataset(df=train_df, max_len=cfg['max_len'], tokenizer=tokenizer)
         valid_dataset = WinnerDataset(df=valid_df, max_len=cfg['max_len'], tokenizer=tokenizer)
         train_loader = DataLoader(train_dataset, batch_size=cfg['batch_size'], shuffle=True,
-                                  num_workers=cfg['num_workers'], collate_fn=DataCollatorWithPadding(tokenizer))
+                                  num_workers=cfg['num_workers'], collate_fn=DataCollatorWithPadding(tokenizer),
+                                  pin_memory=True)
         valid_loader = DataLoader(valid_dataset, batch_size=cfg['batch_size'] * 2, shuffle=False,
-                                  num_workers=cfg['num_workers'], collate_fn=DataCollatorWithPadding(tokenizer))
+                                  num_workers=cfg['num_workers'], collate_fn=DataCollatorWithPadding(tokenizer),
+                                  pin_memory=True)
 
         model = WinnerModel(cfg['model_name'], cfg['num_classes'], tokenizer)
         optimizer = AdamW(model.parameters(), lr=float(cfg['lr']))
