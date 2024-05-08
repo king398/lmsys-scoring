@@ -12,6 +12,8 @@ from utils import seed_everything, find_all_linear_names, compute_metrics
 import torch
 
 os.environ['WANDB_PROJECT'] = 'lmsys-winner'
+
+
 def tokenize_function(examples, tokenizer, max_length):
     tokenized_inputs = tokenizer(examples["text"], truncation=True, padding="longest", max_length=max_length)
     return tokenized_inputs
@@ -49,7 +51,7 @@ def main(cfg):
         dataloader_pin_memory=True,
         lr_scheduler_type="cosine",
         warmup_steps=100,
-        weight_decay=0,
+        weight_decay=0.01,
         save_safetensors=True,
     )
     quant_config = BitsAndBytesConfig(
@@ -71,7 +73,7 @@ def main(cfg):
         target_modules=find_all_linear_names(model), )
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
-    data_collator = DataCollatorForLanguageModeling(tokenizer,mlm=False)
+    data_collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -88,7 +90,7 @@ cfg = {
     'seed': 42,
     'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
     'model_name': 'meta-llama/Meta-Llama-3-8B-Instruct',
-    'max_len': 2048,
+    'max_len': 3096,
     'batch_size': 1,
     'num_classes': 3,
     'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/llama-3-8b',
