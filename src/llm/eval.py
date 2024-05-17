@@ -2,18 +2,17 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import pandas as pd
 import torch
 from tqdm import tqdm
-
-tqdm.pandas()
+from sklearn.metrics import log_loss
 import ast
-
-model = AutoModelForCausalLM.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct", torch_dtype=torch.float16,
-                                             device_map="cuda:1")
 from torch.utils.data import DataLoader, Dataset
 
-model.load_adapter("/home/mithil/PycharmProjects/lmsys-scoring/models/llama-3-8b")
-tokenizer = AutoTokenizer.from_pretrained("/home/mithil/PycharmProjects/lmsys-scoring/models/llama-3-8b")
+model = AutoModelForCausalLM.from_pretrained("mistralai/Mistral-7B-Instruct-v0.2", torch_dtype=torch.float16,
+                                             device_map="cuda:1",attn_implementation="flash_attention_2",trust_remote_code=True)
+
+#model.load_adapter("/home/mithil/PycharmProjects/lmsys-scoring/models/Mistral-7B-v0.1")
+tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B-Instruct-v0.2",trust_remote_code=True)
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
-df = df[df['fold'] == 0].reset_index(drop=True)
+df = df[df['fold'] == 0][:100].reset_index(drop=True)
 
 
 def string_to_list(s):
@@ -40,7 +39,7 @@ After reviewing the responses from both models, please determine which model pro
     text += f""" <result>:"""
     # truncate to 3050 tokens
     text = tokenizer.decode(tokenizer(text, return_tensors="pt", truncation=True, max_length=3000)['input_ids'][0])
-    messages = [{"role": "system", "content": "You are a chatbot"},
+    messages = [
                 {"role": "user", "content": text},
                 ]
     text = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False
@@ -65,17 +64,16 @@ df['text'] = df.apply(prepare_input, axis=1)
 predictions = []
 labels = []
 dataset = EvalDataset(df, tokenizer)
-dataloader = DataLoader(dataset, batch_size=4, num_workers=8, pin_memory=True)
-for batch in tqdm(dataset):
+dataloader = DataLoader(dataset, batch_size=None, num_workers=8, pin_memory=True)
+for batch in tqdm(dataloader):
     inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=3096, padding=True)
     for k, v in inputs.items():
         inputs[k] = v.to("cuda:1")
     outputs = model.generate(**inputs, max_new_tokens=1, do_sample=False, output_scores=True,
                              return_dict_in_generate=True,pad_token_id=tokenizer.eos_token_id)['scores'][0].softmax(dim=1)
-    predictions.extend(outputs[:, [32, 33, 49831]].detach().cpu().numpy().tolist())
-    labels.append(batch['label'])
+    predictions.extend(outputs[:, [330, 365, 14628]].detach().cpu().numpy().tolist())
+    labels.append(batch['label'].item())
 
 
-print(predictions)
-from sklearn.metrics import log_loss
+
 print(log_loss(labels, predictions))

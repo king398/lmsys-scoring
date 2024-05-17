@@ -1,18 +1,18 @@
 seed: 42
-mixed_precision: fp16
+mixed_precision: bf16
 train_csv: /home/mithil/PycharmProjects/lmsys-scoring/data/train_folds.csv
 folds:
   - 0
   - 1
   - 2
   - 3
-model_name: microsoft/deberta-v3-xsmall
+model_name: microsoft/deberta-v3-small
 max_len: 1536
 batch_size: 8
 num_workers: 16
 lr: 1e-5
-epochs: 5
+epochs: 2
 scheduler: linear
 warmup_steps: 0.0
-model_dir: /home/mithil/PycharmProjects/lmsys-scoring/models/deberta-v3-xsmall-baseline-added-token
-num_classes : 3
+model_dir: /home/mithil/PycharmProjects/lmsys-scoring/models/deberta-v3-small-baseline
+num_classes: 3
