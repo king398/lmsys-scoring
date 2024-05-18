@@ -20,7 +20,7 @@ tokenizer = AutoTokenizer.from_pretrained("prometheus-eval/prometheus-7b-v2.0", 
 
 # Read and process the dataset
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
-df = df[df['fold'] == 0].reset_index(drop=True)
+df = df[df['fold'] == 0][:1000].reset_index(drop=True)
 
 
 def string_to_list(s):

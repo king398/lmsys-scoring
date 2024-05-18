@@ -38,3 +38,4 @@ for fold, (train_index, test_index) in enumerate(skf.split(df, df['label'])):
 
 df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds.csv", index=False, encoding='utf-8',
           errors='replace')
+

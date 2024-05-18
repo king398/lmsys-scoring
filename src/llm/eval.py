@@ -8,14 +8,14 @@ from torch.utils.data import DataLoader, Dataset
 
 # Load model and tokenizer
 model = AutoModelForCausalLM.from_pretrained("prometheus-eval/prometheus-7b-v2.0", torch_dtype=torch.float16,
-                                             device_map="cuda:1",
-                                             trust_remote_code=True,attn_implementation="flash_attention_2",)
+                                             device_map="auto",
+                                             trust_remote_code=True, attn_implementation="flash_attention_2", )
 model.load_adapter("/home/mithil/PycharmProjects/lmsys-scoring/models/Promethus-eval-1-epoch/checkpoint-1347")
 tokenizer = AutoTokenizer.from_pretrained("prometheus-eval/prometheus-7b-v2.0", trust_remote_code=True)
-
 # Read and process the dataset
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
 df = df[df['fold'] == 0].reset_index(drop=True)
+
 
 def string_to_list(s):
     try:
@@ -23,11 +23,13 @@ def string_to_list(s):
     except ValueError:
         return []  # Handle cases where conversion fails
 
+
 df['prompt'] = df['prompt'].apply(string_to_list)
 df['response_a'] = df['response_a'].apply(string_to_list)
 df['response_b'] = df['response_b'].apply(string_to_list)
 
 tokenizer.pad_token = tokenizer.eos_token
+
 
 # Prepare the input text
 def prepare_input(row):
@@ -45,6 +47,7 @@ After reviewing the responses from both models, please determine which is the be
     text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
     return text
 
+
 # Define the Dataset
 class EvalDataset(Dataset):
     def __init__(self, df, tokenizer):
@@ -58,29 +61,40 @@ class EvalDataset(Dataset):
     def __getitem__(self, idx):
         return {"text": self.text[idx], "label": self.label[idx]}
 
+
 # Prepare the dataset
 df['text'] = df.apply(prepare_input, axis=1)
 dataset = EvalDataset(df, tokenizer)
-dataloader = DataLoader(dataset, batch_size=4, num_workers=8, pin_memory=True)
+dataloader = DataLoader(dataset, batch_size=None, num_workers=8, pin_memory=True)
 
 predictions = []
 labels = []
 
 # Evaluate the model
 for batch in tqdm(dataloader):
-    batch['text'] = [text + "[RESULT]:" for text in batch['text']]
+    batch['text'] += f"[RESULT]:"
     inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=3096, padding="longest")
     for k, v in inputs.items():
         inputs[k] = v.to("cuda:1")
 
-    outputs = model.generate(**inputs, max_new_tokens=1, do_sample=False, output_scores=True, return_dict_in_generate=True, pad_token_id=tokenizer.eos_token_id)
+    outputs = model.generate(**inputs, max_new_tokens=1, do_sample=False, output_scores=True,
+                             return_dict_in_generate=True, pad_token_id=tokenizer.eos_token_id)
     scores = outputs['scores'][0].softmax(dim=1)
 
     # Extract predictions for specific tokens
     target_token_ids = [330, 365, 14628]  # Token IDs for "A", "B", "tie"
     batch_predictions = scores[:, target_token_ids].detach().cpu().numpy().tolist()
     predictions.extend(batch_predictions)
-    labels.extend(batch['label'].tolist())
+    labels.append(batch['label'].tolist())
 
 # Calculate and print log loss
 print(log_loss(labels, predictions))
+# save to a oof file
+oof_df = pd.DataFrame(predictions, columns=["A", "B", "tie"])
+oof_df["label"] = df["label"]
+oof_df['id'] = df['id']
+# log loss per row
+oof_df["log_loss"] = oof_df.apply(lambda x: log_loss([x["label"]], [x["A"], x["B"], x["tie"]]), axis=1)
+import math
+oof_df['perplexity'] = oof_df.apply(lambda x: math.e ** x["log_loss"], axis=1)
+oof_df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/models/Promethus-eval-1-epoch/oof.csv", index=False)

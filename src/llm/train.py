@@ -44,10 +44,10 @@ def main(cfg):
     valid_df = df[df['fold'] == fold].reset_index(drop=True)
     tokenizer = AutoTokenizer.from_pretrained(cfg['model_name'], add_eos_token=True, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
+    train_df['len'] = train_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
+    train_df = train_df[train_df['len'] < cfg['max_len']].reset_index(drop=True)
+
     train_dataset = Dataset.from_dict({"text": train_df['text']})
-    valid_dataset = Dataset.from_dict({"text": valid_df['text']})
-    # train_dataset = train_dataset.map(tokenize_function, batched=False,
-    #                                  fn_kwargs={"tokenizer": tokenizer, "max_length": cfg['max_len']}, num_proc=16)
     tokenizer.padding_side = "right"
 
     training_args = TrainingArguments(
@@ -79,7 +79,7 @@ def main(cfg):
 
     model = AutoModelForCausalLM.from_pretrained(cfg['model_name'], trust_remote_code=True,
                                                  attn_implementation="flash_attention_2",
-                                                 quantization_config=quant_config,torch_dtype=torch.float16,)
+                                                 quantization_config=quant_config, torch_dtype=torch.float16, )
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     model.gradient_checkpointing_enable()
     model.config.use_cache = False
@@ -107,8 +107,7 @@ def main(cfg):
         data_collator=data_collator,
         compute_metrics=compute_metrics,
         dataset_text_field="text",
-        max_seq_length=3096,
-
+        max_seq_length=2560,
 
     )
 
