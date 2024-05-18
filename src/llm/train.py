@@ -67,6 +67,7 @@ def main(cfg):
         warmup_steps=100,
         weight_decay=0.01,
         save_safetensors=True,
+        resume_from_checkpoint="/home/mithil/PycharmProjects/lmsys-scoring/models/llama-3-8B/checkpoint-1347"
     )
 
     quant_config = BitsAndBytesConfig(
@@ -82,7 +83,7 @@ def main(cfg):
 
     peft_config = LoraConfig(
         r=64,
-        lora_alpha=128,
+        lora_alpha=64,
         lora_dropout=0.05,
         bias="none",
         target_modules=find_all_linear_names(model),

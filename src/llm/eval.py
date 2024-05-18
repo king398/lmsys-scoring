@@ -6,13 +6,14 @@ from sklearn.metrics import log_loss
 import ast
 from torch.utils.data import DataLoader, Dataset
 
-model = AutoModelForCausalLM.from_pretrained("mistralai/Mistral-7B-Instruct-v0.2", torch_dtype=torch.float16,
-                                             device_map="cuda:1",attn_implementation="flash_attention_2",trust_remote_code=True)
+model = AutoModelForCausalLM.from_pretrained("prometheus-eval/prometheus-7b-v2.0", torch_dtype=torch.float16,
+                                             device_map="cuda:1",
+                                             trust_remote_code=True)
 
-#model.load_adapter("/home/mithil/PycharmProjects/lmsys-scoring/models/Mistral-7B-v0.1")
-tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B-Instruct-v0.2",trust_remote_code=True)
+model.load_adapter("/home/mithil/PycharmProjects/lmsys-scoring/models/llama-3-8B/checkpoint-1347")
+tokenizer = AutoTokenizer.from_pretrained("prometheus-eval/prometheus-7b-v2.0", trust_remote_code=True)
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
-df = df[df['fold'] == 0][:100].reset_index(drop=True)
+df = df[df['fold'] == 0].reset_index(drop=True)
 
 
 def string_to_list(s):
@@ -27,22 +28,21 @@ df['response_a'] = df['response_a'].apply(string_to_list)
 df['response_b'] = df['response_b'].apply(string_to_list)
 
 tokenizer.pad_token = tokenizer.eos_token
+
+
 def prepare_input(row):
-    text = """Please analyze the conversation below between a human and two language models (model_a and model_b). The models are each asked to respond to the same prompts which is indicated by Prompt. 
-After reviewing the responses from both models, please determine which model provided better responses overall - model_a, model_b, or was it a tie? Respond with only a single word after <result>: either "A" if model_a was better, "B" if model_b was better, or "tie" if their responses were equally good"""
+    text = """Please analyze the conversation below between a human and two language models which give both respectively give the response ###Response A and ###Response B. The models are each asked to respond to the same prompts which is indicated by ###Instruction:. 
+After reviewing the responses from both models, please determine which is the  better responses overall - Response_a, Response_b, or was it a tie? Respond with only a single word after [RESULT]: . Either "A" if ###Response A was better, "B" if ###Response B was better, or "tie" if their responses were equally good or bad"""
 
     for prompt, response_a, response_b in zip(row['prompt'], row['response_a'], row['response_b']):
         text += f"""
-    prompt: {prompt} 
-    model_a: {response_a} 
-    model_b: {response_b}"""
-    text += f""" <result>:"""
-    # truncate to 3050 tokens
-    text = tokenizer.decode(tokenizer(text, return_tensors="pt", truncation=True, max_length=3000)['input_ids'][0])
+###Instruction:: {prompt} 
+###Response A: {response_a} 
+###Response B: {response_b}"""
     messages = [
-                {"role": "user", "content": text},
-                ]
-    text = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False
+        {"role": "user", "content": text},
+    ]
+    text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False
                                          )
     return text
 
@@ -66,14 +66,14 @@ labels = []
 dataset = EvalDataset(df, tokenizer)
 dataloader = DataLoader(dataset, batch_size=None, num_workers=8, pin_memory=True)
 for batch in tqdm(dataloader):
-    inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=3096, padding=True)
+    batch['text']  += "[RESULT]:"
+    inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=3096, padding=False)
     for k, v in inputs.items():
         inputs[k] = v.to("cuda:1")
     outputs = model.generate(**inputs, max_new_tokens=1, do_sample=False, output_scores=True,
-                             return_dict_in_generate=True,pad_token_id=tokenizer.eos_token_id)['scores'][0].softmax(dim=1)
+                             return_dict_in_generate=True,pad_token_id=tokenizer.eos_token_id)
+    outputs = outputs['scores'][0].softmax(dim=1)
     predictions.extend(outputs[:, [330, 365, 14628]].detach().cpu().numpy().tolist())
     labels.append(batch['label'].item())
-
-
 
 print(log_loss(labels, predictions))
