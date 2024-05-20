@@ -4,7 +4,7 @@ from sklearn.model_selection import StratifiedKFold
 import ast
 import transformers
 
-tokenizer = transformers.AutoTokenizer.from_pretrained('prometheus-eval/prometheus-7b-v2.0')
+tokenizer = transformers.AutoTokenizer.from_pretrained('microsoft/Phi-3-mini-4k-instruct')
 # Load the CSV file with explicit encoding declaration
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train.csv", encoding='utf-8')
 
@@ -36,7 +36,7 @@ After reviewing the responses from both models, please determine which is the  b
 ###Response B: {response_b}"""
     messages = [
         {"role": "user", "content": text},
-        {'role': "assistant", "content": f"[RESULT]: {label_to_response[row['label']]} "}
+        {'role': "assistant", "content": f"[RESULT]: {label_to_response[row['label']]}"}
     ]
     text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False
                                          )

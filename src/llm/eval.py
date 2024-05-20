@@ -5,12 +5,13 @@ from tqdm import tqdm
 from sklearn.metrics import log_loss
 import ast
 from torch.utils.data import DataLoader, Dataset
+import math
 
 # Load model and tokenizer
 model = AutoModelForCausalLM.from_pretrained("prometheus-eval/prometheus-7b-v2.0", torch_dtype=torch.float16,
                                              device_map="auto",
                                              trust_remote_code=True, attn_implementation="flash_attention_2", )
-model.load_adapter("/home/mithil/PycharmProjects/lmsys-scoring/models/Promethus-eval-1-epoch/checkpoint-1347")
+model.load_adapter("/home/mithil/PycharmProjects/lmsys-scoring/models/Prometheus-eval-2-epoch-2560-len")
 tokenizer = AutoTokenizer.from_pretrained("prometheus-eval/prometheus-7b-v2.0", trust_remote_code=True)
 # Read and process the dataset
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
@@ -94,7 +95,13 @@ oof_df = pd.DataFrame(predictions, columns=["A", "B", "tie"])
 oof_df["label"] = df["label"]
 oof_df['id'] = df['id']
 # log loss per row
-oof_df["log_loss"] = oof_df.apply(lambda x: log_loss([x["label"]], [x["A"], x["B"], x["tie"]]), axis=1)
-import math
+log_losses = []
+
+for i in range(len(df)):
+    log_loss_value = log_loss([labels[i]], [predictions[i]], labels=[0, 1, 2])
+    log_losses.append(log_loss_value)
+
+oof_df["log_loss"] = log_losses
+
 oof_df['perplexity'] = oof_df.apply(lambda x: math.e ** x["log_loss"], axis=1)
-oof_df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/models/Promethus-eval-1-epoch/oof.csv", index=False)
+oof_df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/models/Prometheus-eval-2-epoch-2560-len/oof.csv", index=False)
