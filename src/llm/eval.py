@@ -7,12 +7,13 @@ import ast
 from torch.utils.data import DataLoader, Dataset
 import math
 
+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Prometheus-eval-2-epoch-2560-len/merged"
 # Load model and tokenizer
-model = AutoModelForCausalLM.from_pretrained("prometheus-eval/prometheus-7b-v2.0", torch_dtype=torch.float16,
-                                             device_map="auto",
+model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float16,
+                                             device_map="cuda:0",
                                              trust_remote_code=True, attn_implementation="flash_attention_2", )
-model.load_adapter("/home/mithil/PycharmProjects/lmsys-scoring/models/Prometheus-eval-2-epoch-2560-len")
-tokenizer = AutoTokenizer.from_pretrained("prometheus-eval/prometheus-7b-v2.0", trust_remote_code=True)
+model.load_adapter("/home/mithil/PycharmProjects/lmsys-scoring/models/Prometheus-eval-2-epoch-2560-len/merged")
+tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 # Read and process the dataset
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
 df = df[df['fold'] == 0].reset_index(drop=True)
@@ -74,16 +75,16 @@ labels = []
 # Evaluate the model
 for batch in tqdm(dataloader):
     batch['text'] += f"[RESULT]:"
-    inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=3096, padding="longest")
+    inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=2560, padding="longest")
     for k, v in inputs.items():
-        inputs[k] = v.to("cuda:1")
+        inputs[k] = v.to("cuda:0")
 
     outputs = model.generate(**inputs, max_new_tokens=1, do_sample=False, output_scores=True,
                              return_dict_in_generate=True, pad_token_id=tokenizer.eos_token_id)
     scores = outputs['scores'][0].softmax(dim=1)
 
     # Extract predictions for specific tokens
-    target_token_ids = [330, 365, 14628]  # Token IDs for "A", "B", "tie"
+    target_token_ids = [319, 350, 22134]  # Token IDs for "A", "B", "tie"
     batch_predictions = scores[:, target_token_ids].detach().cpu().numpy().tolist()
     predictions.extend(batch_predictions)
     labels.append(batch['label'].tolist())
