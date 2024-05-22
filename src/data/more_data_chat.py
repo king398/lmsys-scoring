@@ -38,7 +38,7 @@ After reviewing the responses from both models, please determine which is the  b
 ###Response B: {response_b}"""
     messages = [
         {"role": "user", "content": text},
-        {'role': "assistant", "content": f"[RESULT]: {label_to_response[row['label']]} "}
+        #{'role': "assistant", "content": f"[RESULT]: {label_to_response[row['label']]} "}
     ]
     text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False
                                          )
@@ -54,7 +54,7 @@ After reviewing the responses from both models, please determine which is the  b
 ###Response B: {row['orig_response_B']}"""
     messages = [
         {"role": "user", "content": text},
-        {'role': "assistant", "content": f"[RESULT]: {row['orig_preference']} "}
+        #{'role': "assistant", "content": f"[RESULT]: {row['orig_preference']} "}
     ]
     text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
     return text
@@ -65,6 +65,8 @@ df['text'] = df.apply(create_text, axis=1)
 skf = StratifiedKFold(n_splits=4, shuffle=True, random_state=42)
 for fold, (train_index, test_index) in enumerate(skf.split(df, df['label'])):
     df.loc[test_index, 'fold'] = fold
+df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", index=False, encoding='utf-8',
+          errors="ignore")
 
 preference_collection = load_dataset('prometheus-eval/Preference-Collection')['train']
 # to pandas df
