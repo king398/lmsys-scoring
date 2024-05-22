@@ -1,12 +1,11 @@
 import gc
 import os
 import warnings
-from typing import Optional, Union, Dict, List
 
 import pandas as pd
 from datasets import Dataset
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model
-from transformers import AutoTokenizer, DataCollatorForLanguageModeling, TrainingArguments, AutoModelForCausalLM, \
+from transformers import AutoTokenizer, TrainingArguments, AutoModelForCausalLM, \
     BitsAndBytesConfig
 from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
 from utils import seed_everything, find_all_linear_names, compute_metrics
@@ -14,13 +13,13 @@ import torch
 
 cfg = {
     'seed': 42,
-    'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
-    'model_name': 'mistralai/Mistral-7B-Instruct-v0.2',
+    'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_extra_data.csv',
+    'model_name': 'prometheus-eval/prometheus-7b-v2.0',
     'max_len': 2560,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Mistral-7B-Instruct-v0.2-2560-3-epoch',
-    'epochs': 3,
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Promethus-eval-2560-1-epoch-extra-data',
+    'epochs': 1,
     'lr': 4e-5,
     'mixed_precision': "bf16",
 }
@@ -77,7 +76,7 @@ def main(cfg):
 
     model = AutoModelForCausalLM.from_pretrained(cfg['model_name'], trust_remote_code=True,
                                                  attn_implementation="flash_attention_2",
-                                                 torch_dtype=torch.float16, )
+                                                 torch_dtype=torch.float16, quantization_config=quant_config)
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     model.gradient_checkpointing_enable()
     model.config.use_cache = False

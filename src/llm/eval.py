@@ -8,13 +8,14 @@ from torch.utils.data import DataLoader, Dataset
 import math
 import numpy as np
 
-model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Prometheus-eval-2-epoch-2560-len/merged"
+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Promethus-eval-2560-1-epoch-extra-data/"
+model_name  = "prometheus-eval/prometheus-7b-v2.0"
 # Load model and tokenizer
-model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float16,
+model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16,
                                              device_map="cuda:0",
                                              trust_remote_code=True, attn_implementation="flash_attention_2", )
-# model.load_adapter("/home/mithil/PycharmProjects/lmsys-scoring/models/Prometheus-eval-2-epoch-2560-len/merged")
-tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+model.load_adapter(model_path)
+tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 # Read and process the dataset
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
 df = df[df['fold'] == 0].reset_index(drop=True)
@@ -34,7 +35,6 @@ df['response_b'] = df['response_b'].apply(string_to_list)
 tokenizer.pad_token = tokenizer.eos_token
 
 
-# Prepare the input text
 def prepare_input(row):
     text = """Please analyze the conversation below between a human and two language models which give both respectively give the response ###Response A and ###Response B. The models are each asked to respond to the same prompts which is indicated by ###Instruction:. 
 After reviewing the responses from both models, please determine which is the better response overall - Response_a, Response_b, or was it a tie? Respond with only a single word after [RESULT]: . Either "A" if ###Response A was better, "B" if ###Response B was better, or "tie" if their responses were equally good or bad"""
@@ -51,7 +51,6 @@ After reviewing the responses from both models, please determine which is the be
     return text
 
 
-# Define the Dataset
 class EvalDataset(Dataset):
     def __init__(self, df, tokenizer):
         self.text = df['text']
