@@ -3,10 +3,8 @@ import numpy as np
 from sklearn.model_selection import StratifiedKFold
 import ast
 import transformers
-from datasets import load_dataset
-import uuid
 
-tokenizer = transformers.AutoTokenizer.from_pretrained('mistralai/Mistral-7B-Instruct-v0.2')
+tokenizer = transformers.AutoTokenizer.from_pretrained('meta-llama/Meta-Llama-3-8B-instruct')
 # Load the CSV file with explicit encoding declaration
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train.csv", encoding='utf-8')
 
@@ -38,25 +36,10 @@ After reviewing the responses from both models, please determine which is the  b
 ###Response B: {response_b}"""
     messages = [
         {"role": "user", "content": text},
-        #{'role': "assistant", "content": f"[RESULT]: {label_to_response[row['label']]} "}
+        {'role': "assistant", "content": f"[RESULT]: {label_to_response[row['label']]} "}
     ]
     text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False
                                          )
-    return text
-
-
-def create_extra_data(row):
-    text = """Please analyze the conversation below between a human and two language models which give both respectively give the response ###Response A and ###Response B. The models are each asked to respond to the same prompts which is indicated by ###Instruction:. 
-After reviewing the responses from both models, please determine which is the  better responses overall - Response_a, Response_b, or was it a tie? Respond with only a single word after [RESULT]: . Either "A" if ###Response A was better, "B" if ###Response B was better, or "tie" if their responses were equally good or bad"""
-    text += f"""
-###Instruction:: {row['instruction']}
-###Response A: {row['orig_response_A']}
-###Response B: {row['orig_response_B']}"""
-    messages = [
-        {"role": "user", "content": text},
-        #{'role': "assistant", "content": f"[RESULT]: {row['orig_preference']} "}
-    ]
-    text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
     return text
 
 
@@ -65,21 +48,20 @@ df['text'] = df.apply(create_text, axis=1)
 skf = StratifiedKFold(n_splits=4, shuffle=True, random_state=42)
 for fold, (train_index, test_index) in enumerate(skf.split(df, df['label'])):
     df.loc[test_index, 'fold'] = fold
+
 df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", index=False, encoding='utf-8',
-          errors="ignore")
+          errors='replace')
 
-preference_collection = load_dataset('prometheus-eval/Preference-Collection')['train']
-# to pandas df
-extra_data = preference_collection.to_pandas()
-extra_data['fold'] = -1
-df = df[['text', 'label', 'fold', 'id']]
-extra_data['id'] = extra_data.apply(lambda x: str(uuid.uuid4()), axis=1)
-extra_data.drop_duplicates(subset=['orig_response_A', 'orig_response_B'], inplace=True)
-extra_data = extra_data.sample(frac=0.25, random_state=42).reset_index(drop=True)
+lmsys_data_extra = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/lmsys-33k-deduplicated.csv",
+                               encoding='utf-8')
 
-extra_data['text'] = extra_data.apply(create_extra_data, axis=1)
-extra_data['label'] = extra_data['orig_preference'].map({'A': 0, 'B': 1, 'tie': 2})
-df = pd.concat([df, extra_data[['text', 'label', 'fold', 'id']]], ignore_index=True)
+lmsys_data_extra['label'] = np.argmax(lmsys_data_extra[['winner_model_a', 'winner_model_b', 'winner_tie']].values,
+                                      axis=1)
+lmsys_data_extra['fold'] = -1
+lmsys_data_extra['prompt'] = lmsys_data_extra['prompt'].apply(string_to_list)
+lmsys_data_extra['response_a'] = lmsys_data_extra['response_a'].apply(string_to_list)
+lmsys_data_extra['response_b'] = lmsys_data_extra['response_b'].apply(string_to_list)
+lmsys_data_extra['text'] = lmsys_data_extra.apply(create_text, axis=1)
+df = pd.concat([df, lmsys_data_extra], ignore_index=True)
 
-df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_extra_data.csv", index=False, encoding='utf-8',
-          errors="ignore")
+df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_extra.csv", index=False, encoding='utf-8',errors='replace')

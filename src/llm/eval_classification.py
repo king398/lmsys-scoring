@@ -1,4 +1,4 @@
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, MistralForSequenceClassification
 import pandas as pd
 import torch
 from tqdm import tqdm
@@ -8,13 +8,14 @@ from torch.utils.data import DataLoader, Dataset
 import math
 import numpy as np
 
-model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2560-2-epoch/"
-model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Promethus-eval-2560-2-epoch-classification/merged"
+model_name = "prometheus-eval/prometheus-7b-v2.0"
 # Load model and tokenizer
-model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16,
-                                             device_map="cuda:1",
-                                             trust_remote_code=True, attn_implementation="flash_attention_2", )
-model.load_adapter(model_path)
+model = MistralForSequenceClassification.from_pretrained(model_path, torch_dtype=torch.float16,
+                                                         device_map="cuda:0",
+                                                         trust_remote_code=True,
+                                                         attn_implementation="flash_attention_2", num_labels=3)
+# model.load_adapter(model_path)
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 # Read and process the dataset
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
@@ -64,43 +65,32 @@ class EvalDataset(Dataset):
         return {"text": self.text[idx], "label": self.label[idx]}
 
 
-# Prepare the dataset
 df['text'] = df.apply(prepare_input, axis=1)
 dataset = EvalDataset(df, tokenizer)
 dataloader = DataLoader(dataset, batch_size=None, num_workers=8, pin_memory=True)
-
-predictions = []
+predictions_all = []
 labels = []
 logits_all = None
-# Evaluate the model
 for batch in tqdm(dataloader):
-    batch['text'] += f"[RESULT]:"
-    inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=3096, padding="longest")
+    inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=2560, padding="longest")
     for k, v in inputs.items():
-        inputs[k] = v.to("cuda:1")
-
-    outputs = model.generate(**inputs, max_new_tokens=1, do_sample=False, output_scores=True,
-                             return_dict_in_generate=True, pad_token_id=tokenizer.eos_token_id)
-
-    scores = torch.softmax(outputs['scores'][0], dim=-1)
-    #if logits_all is None:
-    #    logits_all = logits.detach().cpu().numpy()
-    #else:
-    #    logits_all = np.vstack([logits_all, logits.detach().cpu().numpy()])
-    # Extract predictions for specific tokens
-    target_token_ids = [362, 426, 18623]  # Token IDs for "A", "B", "tie"
-    batch_predictions = scores[:, target_token_ids].detach().cpu().numpy().tolist()
-    predictions.extend(batch_predictions)
-    labels.append(batch['label'].tolist())
-
-# Calculate and print log loss
-# save to a oof file
-log_loss_all = log_loss(labels, predictions)
+        inputs[k] = v.to("cuda:0")
+    with torch.no_grad():
+        outputs = model(**inputs)
+        if logits_all is None:
+            logits_all = outputs.logits
+        else:
+            logits_all = torch.cat((logits_all, outputs.logits), dim=0)
+        predictions = outputs.logits.softmax(dim=-1)
+        predictions_all.append(predictions)
+        labels.append(batch['label'])
+predictions_all = torch.cat(predictions_all, dim=0).cpu().numpy()
+labels = torch.tensor(labels).cpu().numpy()
+log_loss_all = log_loss(labels, predictions_all)
 print(f"Log loss: {log_loss_all}")
 oof_df = pd.DataFrame(predictions, columns=["A", "B", "tie"])
 oof_df["label"] = df["label"]
 oof_df['id'] = df['id']
-# log loss per row
 log_losses = []
 
 for i in range(len(df)):
@@ -111,4 +101,4 @@ oof_df["log_loss"] = log_losses
 
 oof_df['perplexity'] = oof_df.apply(lambda x: math.e ** x["log_loss"], axis=1)
 oof_df.to_csv(f"{model_path}/oof.csv", index=False)
-#np.savez_compressed(f"{model_path}/logits.npz", logits=logits_all)
+np.savez_compressed(f"{model_path}/logits.npz", logits=logits_all)

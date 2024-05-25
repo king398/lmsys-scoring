@@ -29,7 +29,7 @@ After reviewing the responses from both models, please determine which is the be
 ###Response A: {response_a} 
 ###Response B: {response_b}"""
     text = tokenizer.decode(
-        tokenizer(text, return_tensors="pt", truncation=True, max_length=995)['input_ids'][0]
+        tokenizer(text, return_tensors="pt", truncation=True, max_length=2560)['input_ids'][0]
     )
 
     messages = [

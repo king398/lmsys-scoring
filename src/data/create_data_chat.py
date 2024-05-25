@@ -4,7 +4,7 @@ from sklearn.model_selection import StratifiedKFold
 import ast
 import transformers
 
-tokenizer = transformers.AutoTokenizer.from_pretrained('mistralai/Mistral-7B-Instruct-v0.2')
+tokenizer = transformers.AutoTokenizer.from_pretrained('meta-llama/Meta-Llama-3-8B-instruct')
 # Load the CSV file with explicit encoding declaration
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train.csv", encoding='utf-8')
 
@@ -51,4 +51,3 @@ for fold, (train_index, test_index) in enumerate(skf.split(df, df['label'])):
 
 df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", index=False, encoding='utf-8',
           errors='replace')
-tokenizer.encode(df['text'][0])
