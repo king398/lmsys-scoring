@@ -60,7 +60,7 @@ class EvalDataset(Dataset):
         self.tokenizer = tokenizer
         self.label = df['label']
 
-    def __len__(self):
+    def __len__(self):  
         return len(self.text)
 
     def __getitem__(self, idx):

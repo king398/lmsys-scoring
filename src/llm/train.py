@@ -11,14 +11,14 @@ from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
 from utils import seed_everything, find_all_linear_names, compute_metrics
 import torch
 
-cfg = {
+CFG = {
     'seed': 42,
     'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
     'model_name': 'meta-llama/Meta-Llama-3-8B-Instruct',
     'max_len': 3096,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2560-2-epoch',
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2560-2-epoch-with-model-name',
     'epochs': 2,
     'lr': 4e-5,
     'mixed_precision': "bf16",
@@ -67,7 +67,7 @@ def main(cfg):
         warmup_ratio=0.1,
         weight_decay=0.01,
         save_safetensors=True,
-        run_name=cfg['model_name'].split("/")[-1],
+        run_name=cfg['model_dir'].split("/")[-1],
 
     )
 
@@ -115,4 +115,4 @@ def main(cfg):
 
 
 if __name__ == '__main__':
-    main(cfg)
+    main(CFG)

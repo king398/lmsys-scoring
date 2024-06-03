@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from transformers import get_linear_schedule_with_warmup, get_cosine_schedule_with_warmup
 import yaml
-
+import ast
 
 def get_color_escape(r, g, b, background=False):
     return f'\033[{"48" if background else "38"};2;{r};{g};{b}m'
@@ -70,3 +70,9 @@ def find_all_linear_names(model):
     if 'lm_head' in lora_module_names:  # needed for 16-bit
         lora_module_names.remove('lm_head')
     return list(lora_module_names)
+def string_to_list(s):
+    try:
+        return ast.literal_eval(s)
+    except ValueError:
+        return []  # Handle cases where conversion fails
+

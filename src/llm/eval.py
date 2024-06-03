@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, Dataset
 import math
 import numpy as np
 
-model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2560-2-epoch/"
+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2560-2-epoch-extra-data-lmsys/"
 model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
 # Load model and tokenizer
 model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16,
