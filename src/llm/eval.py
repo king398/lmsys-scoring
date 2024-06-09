@@ -6,7 +6,6 @@ from sklearn.metrics import log_loss
 import ast
 from torch.utils.data import DataLoader, Dataset
 import math
-import numpy as np
 
 model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2560-2-epoch-extra-data-lmsys/"
 model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
@@ -16,7 +15,6 @@ model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float
                                              trust_remote_code=True, attn_implementation="flash_attention_2", )
 model.load_adapter(model_path)
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-# Read and process the dataset
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
 df = df[df['fold'] == 0].reset_index(drop=True)
 
@@ -83,18 +81,11 @@ for batch in tqdm(dataloader):
                              return_dict_in_generate=True, pad_token_id=tokenizer.eos_token_id)
 
     scores = torch.softmax(outputs['scores'][0], dim=-1)
-    #if logits_all is None:
-    #    logits_all = logits.detach().cpu().numpy()
-    #else:
-    #    logits_all = np.vstack([logits_all, logits.detach().cpu().numpy()])
-    # Extract predictions for specific tokens
     target_token_ids = [362, 426, 18623]  # Token IDs for "A", "B", "tie"
     batch_predictions = scores[:, target_token_ids].detach().cpu().numpy().tolist()
     predictions.extend(batch_predictions)
     labels.append(batch['label'].tolist())
 
-# Calculate and print log loss
-# save to a oof file
 log_loss_all = log_loss(labels, predictions)
 print(f"Log loss: {log_loss_all}")
 oof_df = pd.DataFrame(predictions, columns=["A", "B", "tie"])
@@ -111,4 +102,12 @@ oof_df["log_loss"] = log_losses
 
 oof_df['perplexity'] = oof_df.apply(lambda x: math.e ** x["log_loss"], axis=1)
 oof_df.to_csv(f"{model_path}/oof.csv", index=False)
-#np.savez_compressed(f"{model_path}/logits.npz", logits=logits_all)
+
+
+
+
+
+
+
+
+
