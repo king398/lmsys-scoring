@@ -4,7 +4,8 @@ from peft import PeftModel, LoraConfig, TaskType
 from torch import nn
 
 model = AutoModelForCausalLM.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct",
-                                             torch_dtype=torch.float16, device_map="auto",attn_implementation="flash_attention_2" )
+                                             torch_dtype=torch.float16, device_map="auto",
+                                             attn_implementation="flash_attention_2")
 
 
 def mean_pooling(token_embeddings, attention_mask):
@@ -23,12 +24,12 @@ class LLamaClassifier(LlamaPreTrainedModel):
         self.model.lm_head = nn.Identity()
         self.linear = nn.Linear(model.config.hidden_size, 3).cuda()
 
-    def forward(self, tensors, labels=None):
+    def forward(self, tensors):
         outputs = self.model(**tensors, return_dict=True)
         hidden_states = outputs['logits']
         hidden_states = mean_pooling(hidden_states, tensors['attention_mask'])
 
-        return self.linear(hidden_states)
+        return {"logits": self.linear(hidden_states)}
 
 
 def find_all_linear_names(model):
