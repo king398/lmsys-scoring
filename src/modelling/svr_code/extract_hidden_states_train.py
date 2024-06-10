@@ -3,12 +3,10 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import pandas as pd
 import torch
 from tqdm import tqdm
-from sklearn.metrics import log_loss
-import ast
 from torch.utils.data import DataLoader
-from src.llm.utils import string_to_list
+from src.modelling.llm.utils import string_to_list
 
-from src.llm.data import prepare_input, EvalDataset
+from src.modelling.llm.data import prepare_input, EvalDataset
 
 model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2560-2-epoch-extra-data-lmsys/"
 model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
