@@ -6,11 +6,12 @@ import pandas as pd
 from datasets import Dataset
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model, TaskType
 from transformers import AutoTokenizer, TrainingArguments, AutoModelForCausalLM, \
-    BitsAndBytesConfig, DataCollatorWithPadding, Trainer
+    BitsAndBytesConfig, DataCollatorWithPadding, Trainer, Qwen2Model
 from utils import seed_everything, find_all_linear_names, compute_metrics
 import torch
 from torch.nn import functional as F
 from model import LLamaClassifier
+
 CFG = {
     'seed': 42,
     'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
@@ -25,6 +26,8 @@ CFG = {
 }
 
 os.environ['WANDB_PROJECT'] = 'lmsys-winner'
+
+
 class CustomTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -40,8 +43,6 @@ class CustomTrainer(Trainer):
 def tokenize_function(examples, tokenizer, max_length):
     tokenized_inputs = tokenizer(examples["text"], truncation=True, padding="longest", max_length=max_length)
     return tokenized_inputs
-
-
 
 
 def main(cfg):
@@ -62,7 +63,7 @@ def main(cfg):
 
     training_args = TrainingArguments(
         per_device_train_batch_size=cfg['batch_size'],
-         num_train_epochs=cfg['epochs'],
+        num_train_epochs=cfg['epochs'],
         bf16=True,
         output_dir=cfg['model_dir'],
         gradient_checkpointing=True,
@@ -94,7 +95,7 @@ def main(cfg):
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     model.gradient_checkpointing_enable()
     model.config.use_cache = False
-    model = LLamaClassifier(model,torch_dtype=torch.bfloat16)
+    model = LLamaClassifier(model, torch_dtype=torch.bfloat16)
     print("Linear layers: ", find_all_linear_names(model))
     peft_config = LoraConfig(
         r=64,
@@ -103,14 +104,13 @@ def main(cfg):
         bias="none",
         target_modules=find_all_linear_names(model),
         task_type=TaskType.SEQ_CLS,
-        modules_to_save=["linear_head"]
+        modules_to_save=["linear_head", "attention_pooling"]
     )
 
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
     for name, param in model.linear_head.named_parameters():
         param.requires_grad = True
-
 
     train_dataset = train_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']))
 
@@ -130,6 +130,7 @@ def main(cfg):
     trainer.train()
     print(model)
     trainer.save_model(cfg['model_dir'])
+
 
 if __name__ == '__main__':
     main(CFG)
