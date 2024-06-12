@@ -17,3 +17,5 @@ for i in all_conversations_list:
 
 prompt_response_df = pd.DataFrame({'prompt': all_prompts, 'response': all_responses})
 
+prompt_response_df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/open_hermes_responses.csv", index=False,
+                          encoding='utf-8', escapechar='\\')

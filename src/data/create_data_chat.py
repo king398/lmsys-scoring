@@ -36,7 +36,7 @@ After reviewing the responses from both models, please determine which is the  b
 ###Response B: {response_b}"""
     messages = [
         {"role": "user", "content": text},
-        {'role': "assistant", "content": f"[RESULT]: {label_to_response[row['label']]} "}
+        {'role': "assistant", "content": f"[RESULT]: "}
     ]
     text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False
                                          )

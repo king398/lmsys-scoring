@@ -1,4 +1,4 @@
-from transformers import AutoTokenizer, MistralForSequenceClassification
+from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaPreTrainedModel
 import pandas as pd
 import torch
 from tqdm import tqdm
@@ -8,29 +8,55 @@ from torch.utils.data import DataLoader, Dataset
 import math
 import numpy as np
 from utils import string_to_list
-model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Promethus-eval-2560-2-epoch-classification/merged"
-model_name = "prometheus-eval/prometheus-7b-v2.0"
+from torch import nn
+from src.modelling.llm.data import prepare_input
+
+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2560-2-epoch-all-logits"
+model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
 # Load model and tokenizer
-model = MistralForSequenceClassification.from_pretrained(model_path, torch_dtype=torch.float16,
-                                                         device_map="cuda:0",
-                                                         trust_remote_code=True,
-                                                         attn_implementation="flash_attention_2", num_labels=3)
+model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16,
+                                             device_map="cuda:0",
+                                             trust_remote_code=True,
+                                             attn_implementation="flash_attention_2", )
 # model.load_adapter(model_path)
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+
+
+def mean_pooling(token_embeddings, attention_mask):
+    input_mask_expanded = (
+        attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+    )
+    return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
+        input_mask_expanded.sum(1), min=1e-9
+    )
+
+
+class LLamaClassifier(LlamaPreTrainedModel):
+    def __init__(self, model, **kwargs):
+        super().__init__(config=model.config, **kwargs)
+        self.model = model
+        self.model.lm_head = nn.Identity()
+        self.linear_head = nn.Linear(model.config.hidden_size, 3).cuda()
+
+    def forward(self, tensors, **kwargs):
+        outputs = self.model(**tensors, return_dict=True)
+        hidden_states = outputs['logits']
+        hidden_states = mean_pooling(hidden_states, tensors['attention_mask']).type(torch.float16)
+
+        return {"logits": self.linear_head(hidden_states)}
+
+
+model = LLamaClassifier(model)
+model.load_adapter(model_path)
 # Read and process the dataset
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
 df = df[df['fold'] == 0].reset_index(drop=True)
-
-
-
 
 df['prompt'] = df['prompt'].apply(string_to_list)
 df['response_a'] = df['response_a'].apply(string_to_list)
 df['response_b'] = df['response_b'].apply(string_to_list)
 
 tokenizer.pad_token = tokenizer.eos_token
-
-
 
 
 class EvalDataset(Dataset):
@@ -46,7 +72,7 @@ class EvalDataset(Dataset):
         return {"text": self.text[idx], "label": self.label[idx]}
 
 
-df['text'] = df.apply(prepare_input, axis=1)
+df['text'] = df.apply(prepare_input, axis=1, args=(tokenizer,))
 dataset = EvalDataset(df, tokenizer)
 dataloader = DataLoader(dataset, batch_size=None, num_workers=8, pin_memory=True)
 predictions_all = []
@@ -56,13 +82,13 @@ for batch in tqdm(dataloader):
     inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=2560, padding="longest")
     for k, v in inputs.items():
         inputs[k] = v.to("cuda:0")
-    with torch.no_grad():
-        outputs = model(**inputs)
+    with torch.no_grad() and torch.cuda.amp.autocast():
+        outputs = model(inputs)
         if logits_all is None:
-            logits_all = outputs.logits
+            logits_all = outputs['logits']
         else:
-            logits_all = torch.cat((logits_all, outputs.logits), dim=0)
-        predictions = outputs.logits.softmax(dim=-1)
+            logits_all = torch.cat((logits_all, outputs['logits']), dim=0)
+        predictions = outputs['logits'].softmax(dim=-1)
         predictions_all.append(predictions)
         labels.append(batch['label'])
 predictions_all = torch.cat(predictions_all, dim=0).cpu().numpy()

@@ -6,11 +6,11 @@ import pandas as pd
 from datasets import Dataset
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model, TaskType
 from transformers import AutoTokenizer, TrainingArguments, AutoModelForCausalLM, \
-    BitsAndBytesConfig, LlamaPreTrainedModel, DataCollatorWithPadding, Trainer
+    BitsAndBytesConfig, DataCollatorWithPadding, Trainer
 from utils import seed_everything, find_all_linear_names, compute_metrics
 import torch
-from torch import nn
 from torch.nn import functional as F
+from model import LLamaClassifier
 CFG = {
     'seed': 42,
     'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
@@ -42,30 +42,6 @@ def tokenize_function(examples, tokenizer, max_length):
     return tokenized_inputs
 
 
-def mean_pooling(token_embeddings, attention_mask):
-    input_mask_expanded = (
-        attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-    )
-    return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
-        input_mask_expanded.sum(1), min=1e-9
-    )
-
-
-
-
-class LLamaClassifier(LlamaPreTrainedModel):
-    def __init__(self, model, **kwargs):
-        super().__init__(config=model.config, **kwargs)
-        self.model = model
-        self.model.lm_head = nn.Identity()
-        self.linear_head = nn.Linear(model.config.hidden_size, 3)
-
-    def forward(self, tensors,**kwargs):
-        outputs = self.model(**tensors, return_dict=True)
-        hidden_states = outputs['logits']
-        hidden_states = mean_pooling(hidden_states, tensors['attention_mask']).type(torch.bfloat16)
-
-        return {"logits": self.linear_head(hidden_states)}
 
 
 def main(cfg):
