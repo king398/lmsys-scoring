@@ -39,10 +39,11 @@ class LLamaClassifier(LlamaPreTrainedModel):
         self.model.lm_head = nn.Identity()
         self.linear_head = nn.Linear(model.config.hidden_size, 3)
         self.attention_pooling = AttentionPooling(model.config.hidden_size)
+        self.dtype_linear = torch.bfloat16
 
     def forward(self, tensors, **kwargs):
         outputs = self.model(**tensors, return_dict=True)
-        hidden_states = outputs['logits']
-        hidden_states = self.attention_pooling(hidden_states, tensors['attention_mask']).type(torch.bfloat16)
+        hidden_states = outputs['logits'].type(self.dtype_linear)
+        hidden_states = self.attention_pooling(hidden_states, tensors['attention_mask']).type(self.dtype_linear)
 
         return {"logits": self.linear_head(hidden_states)}

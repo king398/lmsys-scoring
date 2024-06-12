@@ -14,10 +14,10 @@ data_df = pd.read_csv('/home/mithil/PycharmProjects/lmsys-scoring/data/open_herm
 all_embeddings = None
 
 prompts = data_df['prompt'].tolist()
-batch_size = 128
+batch_size = 256
 for i in tqdm(range(0, len(prompts), batch_size)):
     batch_prompt = prompts[i:i + batch_size]
-    batch_dict = tokenizer(batch_prompt, max_length=8192, padding=True, truncation=True, return_tensors='pt')
+    batch_dict = tokenizer(batch_prompt, max_length=512, padding=True, truncation=True, return_tensors='pt')
 
     for k, v in batch_dict.items():
         batch_dict[k] = v.to('cuda:1')
@@ -29,5 +29,5 @@ for i in tqdm(range(0, len(prompts), batch_size)):
         all_embeddings = torch.cat((all_embeddings, embeddings), dim=0)
 
 all_embeddings = F.normalize(all_embeddings, p=2, dim=1)
-all_embeddings = all_embeddings.numpy()
+all_embeddings = all_embeddings.detach().cpu().numpy()
 np.save('/home/mithil/PycharmProjects/lmsys-scoring/data/open_hermes_embeddings.npy', all_embeddings)

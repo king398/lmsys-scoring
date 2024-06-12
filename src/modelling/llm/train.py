@@ -18,7 +18,7 @@ CFG = {
     'max_len': 3096,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2560-2-epoch-all-logits',
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2560-2-epoch-all-logits-attention-pooling',
     'epochs': 2,
     'lr': 4e-5,
     'mixed_precision': "bf16",
