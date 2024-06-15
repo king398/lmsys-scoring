@@ -14,12 +14,12 @@ from model import LLamaClassifier
 
 CFG = {
     'seed': 42,
-    'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
+    'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_context.csv',
     'model_name': 'meta-llama/Meta-Llama-3-8B-Instruct',
-    'max_len': 3096,
+    'max_len': 4096,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2560-2-epoch-all-logits-attention-pooling',
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2560-2-epoch-all-logits-context',
     'epochs': 2,
     'lr': 4e-5,
     'mixed_precision': "bf16",
@@ -82,6 +82,7 @@ def main(cfg):
         save_safetensors=True,
         run_name=cfg['model_dir'].split("/")[-1],
         remove_unused_columns=False,
+        ddp_find_unused_parameters=True
 
     )
 
@@ -104,7 +105,7 @@ def main(cfg):
         bias="none",
         target_modules=find_all_linear_names(model),
         task_type=TaskType.SEQ_CLS,
-        modules_to_save=["linear_head", "attention_pooling"]
+        modules_to_save=["linear_head", ],
     )
 
     model = get_peft_model(model, peft_config)
