@@ -11,7 +11,7 @@ from utils import string_to_list
 from torch import nn
 from src.modelling.llm.data import prepare_input
 
-model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2560-2-epoch-all-logits"
+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-3096-2-epoch-label-smoothing"
 model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
 # Load model and tokenizer
 model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16,

@@ -14,12 +14,12 @@ from model import LLamaClassifier
 
 CFG = {
     'seed': 42,
-    'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_context.csv',
+    'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
     'model_name': 'meta-llama/Meta-Llama-3-8B-Instruct',
-    'max_len': 4096,
+    'max_len': 3096,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2560-2-epoch-all-logits-context',
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-3096-2-epoch-label-smoothing',
     'epochs': 2,
     'lr': 4e-5,
     'mixed_precision': "bf16",
@@ -36,7 +36,7 @@ class CustomTrainer(Trainer):
         labels = inputs.pop("targets").long()
         outputs = model(tensors=inputs)
         logits = outputs.get('logits')
-        loss = F.cross_entropy(logits, labels)
+        loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
         return (loss, outputs) if return_outputs else loss
 
 
@@ -82,7 +82,6 @@ def main(cfg):
         save_safetensors=True,
         run_name=cfg['model_dir'].split("/")[-1],
         remove_unused_columns=False,
-        ddp_find_unused_parameters=True
 
     )
 

@@ -38,6 +38,7 @@ class LLamaClassifier(LlamaPreTrainedModel):
         self.model = model
         self.model.lm_head = nn.Identity()
         self.linear_head = nn.Linear(model.config.hidden_size, 3)
+
         self.dtype_linear = torch.bfloat16
 
     @staticmethod

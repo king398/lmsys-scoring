@@ -22,12 +22,17 @@ class LLamaClassifier(LlamaPreTrainedModel):
         super().__init__(config=model.config)
         self.model = model
         self.model.lm_head = nn.Identity()
-        self.linear = nn.Linear(model.config.hidden_size, 3).cuda()
+        self.linear = nn.Linear(model.config.hidden_size*(model.config.num_hidden_layers+1), 3).cuda()
 
     def forward(self, tensors):
-        outputs = self.model(**tensors, return_dict=True)
-        hidden_states = outputs['logits']
-        hidden_states = mean_pooling(hidden_states, tensors['attention_mask'])
+        outputs = self.model(**tensors, return_dict=True, output_hidden_states=True)
+        hidden_states_all = None
+        for hidden_states in outputs['hidden_states']:
+            if hidden_states_all is None:
+                hidden_states_all = hidden_states
+            else:
+                hidden_states_all = torch.cat((hidden_states_all, hidden_states), dim=-1)
+        hidden_states = mean_pooling(hidden_states_all, tensors['attention_mask'])
 
         return {"logits": self.linear(hidden_states)}
 
@@ -55,9 +60,9 @@ model = PeftModel(LLamaClassifierModel, peft_config=LoraConfig(
     task_type=TaskType.SEQ_CLS,
 ))
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct")
-p = tokenizer("Hello, my dog is cute", return_tensors="pt")
+p = tokenizer(["Hello, my dog is cute", "Hello, my dog is cute"], return_tensors="pt")
 for k, v in p.items():
     p[k] = v.to("cuda:0")
 output = model(p)
-print(output)
+print(model)
 model = model.merge_and_unload()
