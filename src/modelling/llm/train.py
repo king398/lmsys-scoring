@@ -87,7 +87,7 @@ def main(cfg):
         save_safetensors=True,
         run_name=cfg['model_dir'].split("/")[-1],
         remove_unused_columns=False,
-        eval_strategy="epochs",
+        eval_strategy="epoch",
         metric_for_best_model="log_loss",
         label_names=["targets"],
 
@@ -112,7 +112,7 @@ def main(cfg):
         bias="none",
         target_modules=find_all_linear_names(model),
         task_type=TaskType.SEQ_CLS,
-        modules_to_save=["linear_head", ],
+        modules_to_save=["linear_head"],
     )
 
     model = get_peft_model(model, peft_config)
