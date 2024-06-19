@@ -21,7 +21,7 @@ CFG = {
     'max_len': 3096,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-3096-2-epoch-label-smoothing-deeper-network',
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-3096-2-epoch-label-smoothing-0-15',
     'epochs': 2,
     'lr': 4e-5,
     'mixed_precision': "bf16",
@@ -38,7 +38,7 @@ class CustomTrainer(Trainer):
         labels = inputs.pop("targets").long()
         outputs = model(**inputs)
         logits = outputs.get('logits')
-        loss = F.cross_entropy(logits, labels, label_smoothing=0.10)
+        loss = F.cross_entropy(logits, labels, label_smoothing=0.15)
         return (loss, outputs) if return_outputs else loss
 
 
