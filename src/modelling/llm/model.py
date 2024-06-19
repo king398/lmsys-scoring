@@ -37,7 +37,15 @@ class LLamaClassifier(LlamaPreTrainedModel):
         super().__init__(config=model.config, **kwargs)
         self.model = model
         self.model.lm_head = nn.Identity()
-        self.linear_head = nn.Linear(model.config.hidden_size, 3)
+        self.linear_head = nn.Sequential(
+            nn.Linear(model.config.hidden_size, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, 3)
+        )
 
         self.dtype_linear = torch.bfloat16
 

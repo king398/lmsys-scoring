@@ -32,8 +32,9 @@ def get_score(y_true, y_pred):
 
 def compute_metrics(eval_pred):
     predictions, labels = eval_pred
+    # perform softmax on predictions
+    predictions = torch.nn.functional.softmax(torch.tensor(predictions), dim=1).numpy()
 
-    print(predictions.shape, labels.shape)
     loss = log_loss(labels, predictions)
     results = {
         'log_loss': loss

@@ -21,7 +21,7 @@ CFG = {
     'max_len': 3096,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-3096-2-epoch-label-smoothing',
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-3096-2-epoch-label-smoothing-deeper-network',
     'epochs': 2,
     'lr': 4e-5,
     'mixed_precision': "bf16",
@@ -38,7 +38,7 @@ class CustomTrainer(Trainer):
         labels = inputs.pop("targets").long()
         outputs = model(**inputs)
         logits = outputs.get('logits')
-        loss = F.cross_entropy(logits, labels, label_smoothing=0.15)
+        loss = F.cross_entropy(logits, labels, label_smoothing=0.10)
         return (loss, outputs) if return_outputs else loss
 
 
@@ -59,7 +59,7 @@ def main(cfg):
     tokenizer.pad_token = tokenizer.eos_token
     train_df['len'] = train_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
     train_df = train_df[train_df['len'] < cfg['max_len']].reset_index(drop=True)
-    valid_df = df[df['fold'] == fold][:100].reset_index(drop=True)
+    valid_df = df[df['fold'] == fold].reset_index(drop=True)
     valid_df['len'] = valid_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
     valid_df = valid_df[valid_df['len'] < cfg['max_len']].reset_index(drop=True)
     train_dataset = Dataset.from_dict({"text": train_df['text'], "targets": train_df['label']})
@@ -87,8 +87,7 @@ def main(cfg):
         save_safetensors=True,
         run_name=cfg['model_dir'].split("/")[-1],
         remove_unused_columns=False,
-        eval_steps=5,
-        eval_strategy="steps",
+        eval_strategy="epochs",
         metric_for_best_model="log_loss",
         label_names=["targets"],
 
@@ -126,7 +125,6 @@ def main(cfg):
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer, )
     train_dataset = train_dataset.remove_columns(["text"])
     valid_dataset = valid_dataset.remove_columns(["text"])
-    print(train_dataset)
     trainer = CustomTrainer(
         model=model,
         args=training_args,
@@ -135,7 +133,6 @@ def main(cfg):
         data_collator=data_collator,
         compute_metrics=compute_metrics,
         eval_dataset=valid_dataset,
-
 
     )
 
