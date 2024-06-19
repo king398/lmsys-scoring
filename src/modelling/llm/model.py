@@ -51,9 +51,9 @@ class LLamaClassifier(LlamaPreTrainedModel):
             input_mask_expanded.sum(1), min=1e-9
         )
 
-    def forward(self, tensors, **kwargs):
-        outputs = self.model(**tensors, return_dict=True)
-        hidden_states = outputs['logits'].type(self.dtype_linear)
-        hidden_states = self.mean_pooling(hidden_states, tensors['attention_mask']).type(self.dtype_linear)
+    def forward(self, input_ids, attention_mask, **kwargs):
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
+        hidden_states = outputs['logits']
+        hidden_states = mean_pooling(hidden_states, attention_mask).type(torch.bfloat16)
 
         return {"logits": self.linear_head(hidden_states)}

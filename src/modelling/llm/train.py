@@ -6,11 +6,13 @@ import pandas as pd
 from datasets import Dataset
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model, TaskType
 from transformers import AutoTokenizer, TrainingArguments, AutoModelForCausalLM, \
-    BitsAndBytesConfig, DataCollatorWithPadding, Trainer, Qwen2Model
+    BitsAndBytesConfig, DataCollatorWithPadding, Trainer
 from utils import seed_everything, find_all_linear_names, compute_metrics
 import torch
 from torch.nn import functional as F
 from model import LLamaClassifier
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 CFG = {
     'seed': 42,
@@ -34,9 +36,9 @@ class CustomTrainer(Trainer):
 
     def compute_loss(self, model, inputs, return_outputs=False):
         labels = inputs.pop("targets").long()
-        outputs = model(tensors=inputs)
+        outputs = model(**inputs)
         logits = outputs.get('logits')
-        loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
+        loss = F.cross_entropy(logits, labels, label_smoothing=0.15)
         return (loss, outputs) if return_outputs else loss
 
 
@@ -57,8 +59,11 @@ def main(cfg):
     tokenizer.pad_token = tokenizer.eos_token
     train_df['len'] = train_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
     train_df = train_df[train_df['len'] < cfg['max_len']].reset_index(drop=True)
-
+    valid_df = df[df['fold'] == fold][:100].reset_index(drop=True)
+    valid_df['len'] = valid_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
+    valid_df = valid_df[valid_df['len'] < cfg['max_len']].reset_index(drop=True)
     train_dataset = Dataset.from_dict({"text": train_df['text'], "targets": train_df['label']})
+    valid_dataset = Dataset.from_dict({"text": valid_df['text'], "targets": valid_df['label']})
     tokenizer.padding_side = "right"
 
     training_args = TrainingArguments(
@@ -82,6 +87,10 @@ def main(cfg):
         save_safetensors=True,
         run_name=cfg['model_dir'].split("/")[-1],
         remove_unused_columns=False,
+        eval_steps=5,
+        eval_strategy="steps",
+        metric_for_best_model="log_loss",
+        label_names=["targets"],
 
     )
 
@@ -113,9 +122,10 @@ def main(cfg):
         param.requires_grad = True
 
     train_dataset = train_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']))
-
+    valid_dataset = valid_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']))
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer, )
     train_dataset = train_dataset.remove_columns(["text"])
+    valid_dataset = valid_dataset.remove_columns(["text"])
     print(train_dataset)
     trainer = CustomTrainer(
         model=model,
@@ -124,6 +134,8 @@ def main(cfg):
         tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
+        eval_dataset=valid_dataset,
+
 
     )
 
