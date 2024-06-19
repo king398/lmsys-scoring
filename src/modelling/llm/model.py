@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from transformers import LlamaPreTrainedModel
+from transformers import LlamaPreTrainedModel, MistralPreTrainedModel
 import torch.nn.functional as F
 
 
@@ -33,6 +33,33 @@ class AttentionPooling(nn.Module):
 
 
 class LLamaClassifier(LlamaPreTrainedModel):
+    def __init__(self, model, **kwargs):
+        super().__init__(config=model.config, **kwargs)
+        self.model = model
+        self.model.lm_head = nn.Identity()
+        self.linear_head = nn.Linear(model.config.hidden_size, 3)
+
+        self.dtype_linear = torch.bfloat16
+
+    @staticmethod
+    def mean_pooling(token_embeddings, attention_mask):
+        input_mask_expanded = (
+            attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+        )
+
+        return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
+            input_mask_expanded.sum(1), min=1e-9
+        )
+
+    def forward(self, input_ids, attention_mask, **kwargs):
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
+        hidden_states = outputs['logits']
+        hidden_states = mean_pooling(hidden_states, attention_mask).type(torch.bfloat16)
+
+        return {"logits": self.linear_head(hidden_states)}
+
+
+class MistralClassifier(MistralPreTrainedModel):
     def __init__(self, model, **kwargs):
         super().__init__(config=model.config, **kwargs)
         self.model = model

@@ -17,11 +17,11 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 CFG = {
     'seed': 42,
     'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
-    'model_name': 'meta-llama/Meta-Llama-3-8B-Instruct',
-    'max_len': 3096,
+    'model_name': 'prometheus-eval/prometheus-7b-v2.0',
+    'max_len': 2560,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-3096-2-epoch-label-smoothing-0-15',
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/prometheus-7b-v2.0-2-epoch-label-smoothing-0-15',
     'epochs': 2,
     'lr': 4e-5,
     'mixed_precision': "bf16",
@@ -38,7 +38,7 @@ class CustomTrainer(Trainer):
         labels = inputs.pop("targets").long()
         outputs = model(**inputs)
         logits = outputs.get('logits')
-        loss = F.cross_entropy(logits, labels, label_smoothing=0.15)
+        loss = F.cross_entropy(logits, labels, label_smoothing=0.10)
         return (loss, outputs) if return_outputs else loss
 
 
