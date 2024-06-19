@@ -3,3 +3,6 @@ data/
 *.iml
 /models
 .idea
+/wandb
+*.index
+/src/retrieval/index_infos.json
