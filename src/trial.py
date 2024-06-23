@@ -22,7 +22,7 @@ class LLamaClassifier(LlamaPreTrainedModel):
         super().__init__(config=model.config)
         self.model = model
         self.model.lm_head = nn.Identity()
-        self.linear = nn.Linear(model.config.hidden_size*(model.config.num_hidden_layers+1), 3).cuda()
+        self.linear = nn.Linear(model.config.hidden_size*(model.config.num_hidden_layers), 3).cuda()
 
     def forward(self, tensors):
         outputs = self.model(**tensors, return_dict=True, output_hidden_states=True)

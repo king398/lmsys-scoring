@@ -6,3 +6,4 @@ data/
 /wandb
 *.index
 /src/retrieval/index_infos.json
+/vllm

@@ -1,4 +1,4 @@
-from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaPreTrainedModel
+from transformers import AutoTokenizer, AutoModelForCausalLM, MistralPreTrainedModel
 import pandas as pd
 import torch
 from tqdm import tqdm
@@ -11,11 +11,11 @@ from utils import string_to_list
 from torch import nn
 from src.modelling.llm.data import prepare_input
 
-model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-3096-2-epoch-label-smoothing"
-model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/prometheus-7b-v2.0-2-epoch-label-smoothing-0-15"
+model_name = "prometheus-eval/prometheus-7b-v2.0"
 # Load model and tokenizer
 model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16,
-                                             device_map="cuda:0",
+                                             device_map="cuda:1",
                                              trust_remote_code=True,
                                              attn_implementation="flash_attention_2", )
 # model.load_adapter(model_path)
@@ -31,12 +31,12 @@ def mean_pooling(token_embeddings, attention_mask):
     )
 
 
-class LLamaClassifier(LlamaPreTrainedModel):
+class MistralClassifier(MistralPreTrainedModel):
     def __init__(self, model, **kwargs):
         super().__init__(config=model.config, **kwargs)
         self.model = model
         self.model.lm_head = nn.Identity()
-        self.linear_head = nn.Linear(model.config.hidden_size, 3).cuda()
+        self.linear_head = nn.Linear(model.config.hidden_size, 3).to("cuda:1")
 
     def forward(self, tensors, **kwargs):
         outputs = self.model(**tensors, return_dict=True)
@@ -46,7 +46,7 @@ class LLamaClassifier(LlamaPreTrainedModel):
         return {"logits": self.linear_head(hidden_states)}
 
 
-model = LLamaClassifier(model)
+model = MistralClassifier(model)
 model.load_adapter(model_path)
 # Read and process the dataset
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
@@ -81,7 +81,7 @@ logits_all = None
 for batch in tqdm(dataloader):
     inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=2560, padding="longest")
     for k, v in inputs.items():
-        inputs[k] = v.to("cuda:0")
+        inputs[k] = v.to("cuda:1")
     with torch.no_grad() and torch.cuda.amp.autocast():
         outputs = model(inputs)
         if logits_all is None:

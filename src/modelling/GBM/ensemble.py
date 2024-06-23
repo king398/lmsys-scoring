@@ -4,7 +4,7 @@ from sklearn.metrics import log_loss
 
 df = pd.read_csv(
     "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-3096-2-epoch-label-smoothing/oof.csv")
-lgbm_preds = np.load("/home/mithil/PycharmProjects/lmsys-scoring/data/valid_preds.npy")
+lgbm_preds = np.load("/home/mithil/PycharmProjects/lmsys-scoring/data/valid_preds_xgb.npy")
 llama_preds = df[['A', 'B', 'tie']].values
 
 weights = np.linspace(0, 1, 1001)

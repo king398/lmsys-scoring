@@ -4,7 +4,9 @@ from sklearn.model_selection import StratifiedKFold
 import ast
 import transformers
 
+# Load the tokenizer
 tokenizer = transformers.AutoTokenizer.from_pretrained('meta-llama/Meta-Llama-3-8B-instruct')
+
 # Load the CSV file with explicit encoding declaration
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train.csv", encoding='utf-8')
 
@@ -22,6 +24,7 @@ def string_to_list(s):
 df['prompt'] = df['prompt'].apply(string_to_list)
 df['response_a'] = df['response_a'].apply(string_to_list)
 df['response_b'] = df['response_b'].apply(string_to_list)
+
 label_to_response = {0: 'A', 1: 'B', 2: 'tie'}
 
 
@@ -38,16 +41,56 @@ After reviewing the responses from both models, please determine which is the  b
         {"role": "user", "content": text},
         {'role': "assistant", "content": f"[RESULT]: "}
     ]
-    text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False
-                                         )
+    text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
     return text
 
 
 df['text'] = df.apply(create_text, axis=1)
 
+# Add a column indicating the row is not swapped
+df['swapped'] = False
+
+
+def swap_responses_and_labels(row):
+    swapped_row = row.copy()
+    swapped_row['response_a'], swapped_row['response_b'] = row['response_b'], row['response_a']
+    if row['label'] == 0:
+        swapped_row['label'] = 1
+    elif row['label'] == 1:
+        swapped_row['label'] = 0
+    swapped_row['swapped'] = True
+    swapped_row['fold'] = row['fold']
+    text = f"""Please analyze the conversation below between a human and two language models which give both respectively give the response ###Response A and ###Response B. The models are each asked to respond to the same prompts which is indicated by ###Instruction:. 
+After reviewing the responses from both models, please determine which is the  better responses overall - Response_a, Response_b, or was it a tie? Respond with only a single word after [RESULT]: . Either "A" if ###Response A was better, "B" if ###Response B was better, or "tie" if their responses were equally good or bad"""
+
+    for prompt, response_a, response_b in zip(swapped_row['prompt'], swapped_row['response_a'], swapped_row['response_b']):
+        text += f"""
+###Instruction:: {prompt} 
+###Response A: {response_a} 
+###Response B: {response_b}"""
+    messages = [
+        {"role": "user", "content": text},
+        {'role': "assistant", "content": f"[RESULT]: "}
+    ]
+    text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
+    swapped_row['text'] = text
+
+    return swapped_row
+
+
 skf = StratifiedKFold(n_splits=4, shuffle=True, random_state=42)
 for fold, (train_index, test_index) in enumerate(skf.split(df, df['label'])):
     df.loc[test_index, 'fold'] = fold
+df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", index=False,
+                    encoding='utf-8', errors='replace')
 
-df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", index=False, encoding='utf-8',
-          errors='replace')
+swapped_df = df.apply(swap_responses_and_labels, axis=1)
+
+swapped_df['text'] = swapped_df.apply(create_text, axis=1)
+
+augmented_df = pd.concat([df, swapped_df], ignore_index=True)
+
+augmented_df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_augmented.csv", index=False,
+                    encoding='utf-8', errors='replace')
+
+print("Augmented data has been saved successfully.")

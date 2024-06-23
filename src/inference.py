@@ -1,12 +1,17 @@
+import glob
+
+import peft
 import torch
 import pandas as pd
 import gc
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, DataCollatorWithPadding, LlamaPreTrainedModel
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, DataCollatorWithPadding, \
+    LlamaPreTrainedModel
 from tqdm import tqdm
 from torch.utils.data import DataLoader, Dataset
 from threading import Thread, Lock
 import ast
 from torch import nn
+
 torch.backends.cuda.enable_mem_efficient_sdp(False)
 
 lock = Lock()
@@ -74,12 +79,14 @@ def run_inference(dataset, tokenizer, model, device, results, index):
 
     with lock:
         results[index] = predictions
+
+
 class LLamaClassifier(LlamaPreTrainedModel):
-    def __init__(self, model, **kwargs):
+    def __init__(self, model, device, **kwargs):
         super().__init__(config=model.config, **kwargs)
         self.model = model
         self.model.lm_head = nn.Identity()
-        self.linear_head = nn.Linear(model.config.hidden_size, 3).cuda()
+        self.linear_head = nn.Linear(model.config.hidden_size, 3).to(device)
 
     @staticmethod
     def mean_pooling(token_embeddings, attention_mask):
@@ -108,13 +115,31 @@ def main(cfg):
     model_1 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.float16,
                                                    device_map="cuda:0", trust_remote_code=True,
                                                    quantization_config=bnb_config)
-    model_1 = LLamaClassifier(model_1)
+    model_1 = LLamaClassifier(model_1, "cuda:0")
+    model_1 = peft.PeftModel.from_pretrained(model_1, glob.glob(cfg['adapter_path'])[0], adapter_name="adapter_1")
+    model_1.load_adapter(glob.glob(cfg['adapter_path'])[1], adapter_name="adapter_2")
+    model_1.load_adapter(glob.glob(cfg['adapter_path'])[2], adapter_name="adapter_3")
+    model_1.load_adapter(glob.glob(cfg['adapter_path'])[3], adapter_name="adapter_4")
+
+    model_1.add_weighted_adapter(['adapter_1', 'adapter_2', 'adapter_3', 'adapter_4'], [1.0, 1.0, 1.0, 1.0,],
+                                 combination_type="cat",adapter_name="all" )
+    model_1.set_adapter("all")
     # model_1.gradient_checkpointing_enable()
     model_2 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.float16,
                                                    device_map="cuda:1", trust_remote_code=True,
                                                    quantization_config=bnb_config)
-    model_2 = LLamaClassifier(model_2)
-    # model_2.gradient_checkpointing_enable()
+    model_2 = LLamaClassifier(model_2, "cuda:1")
+    model_2 = peft.PeftModel.from_pretrained(model_2, glob.glob(cfg['adapter_path'])[0], adapter_name="adapter_1")
+    model_2.load_adapter(glob.glob(cfg['adapter_path'])[1], adapter_name="adapter_2")
+    model_2.load_adapter(glob.glob(cfg['adapter_path'])[2], adapter_name="adapter_3")
+    model_2.load_adapter(glob.glob(cfg['adapter_path'])[3], adapter_name="adapter_4")
+
+    model_2.add_weighted_adapter(['adapter_1', 'adapter_2', 'adapter_3', 'adapter_4'], [1.0, 1.0, 1.0, 1.0,],
+                                 combination_type="cat", adapter_name="all")
+    model_2.set_adapter("all")
+
+
+# model_2.gradient_checkpointing_enable()
 
     tokenizer = AutoTokenizer.from_pretrained(cfg['model_path'], trust_remote_code=True)
     test_csv = pd.read_csv(cfg['test_csv'], encoding='utf-8')
@@ -150,7 +175,8 @@ def main(cfg):
 
 
 cfg = {
-    "model_path": "/kaggle/input/meta-llama-3-8b-instruct-2560-2-epoch-all-logits-m/Meta-Llama-3-8B-Instruct-2560-2-epoch-all-logits/",
+    "model_path": "/kaggle/input/llama-3/transformers/8b-chat-hf/1",
+    "adapter_path": "/kaggle/input/woong-llm-gogo/*",
     "max_len": 3096,
     "test_csv": "/kaggle/input/lmsys-chatbot-arena/test.csv",
     "batch_size": 1,

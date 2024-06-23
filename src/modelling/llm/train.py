@@ -16,13 +16,13 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 CFG = {
     'seed': 42,
-    'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
-    'model_name': 'prometheus-eval/prometheus-7b-v2.0',
+    'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_augmented.csv',
+    'model_name': 'meta-llama/Meta-Llama-3-8B-Instruct',
     'max_len': 2560,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/prometheus-7b-v2.0-2-epoch-label-smoothing-0-15',
-    'epochs': 2,
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2-epoch-label-swapped-labels-aug',
+    'epochs': 1,
     'lr': 4e-5,
     'mixed_precision': "bf16",
 }
@@ -59,7 +59,7 @@ def main(cfg):
     tokenizer.pad_token = tokenizer.eos_token
     train_df['len'] = train_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
     train_df = train_df[train_df['len'] < cfg['max_len']].reset_index(drop=True)
-    valid_df = df[df['fold'] == fold].reset_index(drop=True)
+    valid_df = df[(df['fold'] == fold) & (df['swapped'] == False)].reset_index(drop=True)
     valid_df['len'] = valid_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
     valid_df = valid_df[valid_df['len'] < cfg['max_len']].reset_index(drop=True)
     train_dataset = Dataset.from_dict({"text": train_df['text'], "targets": train_df['label']})
