@@ -3,7 +3,7 @@ import pandas as pd
 from transformers import AutoTokenizer
 
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
-df = df[df['fold'] == 0].reset_index(drop=True)
+df = df[df['fold'] != 0].reset_index(drop=True)
 
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct")
 

@@ -6,39 +6,25 @@ import pandas as pd
 from datasets import Dataset
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model, TaskType
 from transformers import AutoTokenizer, TrainingArguments, AutoModelForCausalLM, \
-    BitsAndBytesConfig, DataCollatorWithPadding, Trainer
+    BitsAndBytesConfig, DataCollatorForLanguageModeling, Trainer
 from utils import seed_everything, find_all_linear_names, compute_metrics
 import torch
-from torch.nn import functional as F
-from model import LLamaClassifier
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 CFG = {
     'seed': 42,
-    'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
+    'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_generated_text_pretrained.csv',
     'model_name': 'NousResearch/Hermes-2-Theta-Llama-3-8B',
-    'max_len': 3096,
+    'max_len': 4096,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Hermes-2-Theta-2-epoch-0-1-smooth',
-    'epochs': 2,
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Hermes-2-Theta-2-epoch-pretrain',
+    'epochs': 1,
     'lr': 4e-5,
     'mixed_precision': "bf16",
 }
 os.environ['WANDB_PROJECT'] = 'lmsys-winner'
-
-
-class CustomTrainer(Trainer):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    def compute_loss(self, model, inputs, return_outputs=False):
-        labels = inputs.pop("targets").long()
-        outputs = model(**inputs)
-        logits = outputs.get('logits')
-        loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
-        return (loss, outputs) if return_outputs else loss
 
 
 def tokenize_function(examples, tokenizer, max_length):
@@ -53,16 +39,20 @@ def main(cfg):
     gc.enable()
     df = pd.read_csv(cfg['train_csv'])
     fold = 0
+    print(df['fold'].value_counts(
+
+    ))
     train_df = df[df['fold'] != fold].reset_index(drop=True)
+    print(train_df.head())
     tokenizer = AutoTokenizer.from_pretrained(cfg['model_name'], add_eos_token=True, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
     train_df['len'] = train_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
     train_df = train_df[train_df['len'] < cfg['max_len']].reset_index(drop=True)
-    valid_df = df[(df['fold'] == fold) & (df['swapped'] == False)].reset_index(drop=True)
+    valid_df = df[(df['fold'] == fold)].reset_index(drop=True)
     valid_df['len'] = valid_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
     valid_df = valid_df[valid_df['len'] < cfg['max_len']].reset_index(drop=True)
-    train_dataset = Dataset.from_dict({"text": train_df['text'], "targets": train_df['label']})
-    valid_dataset = Dataset.from_dict({"text": valid_df['text'], "targets": valid_df['label']})
+    train_dataset = Dataset.from_dict({"text": train_df['text']})
+    valid_dataset = Dataset.from_dict({"text": valid_df['text']})
     tokenizer.padding_side = "right"
 
     training_args = TrainingArguments(
@@ -86,9 +76,6 @@ def main(cfg):
         save_safetensors=True,
         run_name=cfg['model_dir'].split("/")[-1],
         remove_unused_columns=False,
-        eval_strategy="epoch",
-        metric_for_best_model="log_loss",
-        label_names=["targets"],
 
     )
 
@@ -102,7 +89,6 @@ def main(cfg):
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     model.gradient_checkpointing_enable()
     model.config.use_cache = False
-    model = LLamaClassifier(model, torch_dtype=torch.bfloat16)
     print("Linear layers: ", find_all_linear_names(model))
     peft_config = LoraConfig(
         r=64,
@@ -110,33 +96,28 @@ def main(cfg):
         lora_dropout=0.05,
         bias="none",
         target_modules=find_all_linear_names(model),
-        task_type=TaskType.SEQ_CLS,
-        modules_to_save=["linear_head"],
+        task_type=TaskType.CAUSAL_LM,
     )
 
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
-    for name, param in model.linear_head.named_parameters():
-        param.requires_grad = True
 
     train_dataset = train_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']))
     valid_dataset = valid_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']))
-    data_collator = DataCollatorWithPadding(tokenizer=tokenizer, )
+    data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
     train_dataset = train_dataset.remove_columns(["text"])
     valid_dataset = valid_dataset.remove_columns(["text"])
-    trainer = CustomTrainer(
+    trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         tokenizer=tokenizer,
         data_collator=data_collator,
-        compute_metrics=compute_metrics,
         eval_dataset=valid_dataset,
 
     )
 
     trainer.train()
-    print(model)
     trainer.save_model(cfg['model_dir'])
 
 

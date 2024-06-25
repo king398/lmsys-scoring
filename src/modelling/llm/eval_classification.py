@@ -1,4 +1,4 @@
-from transformers import AutoTokenizer, AutoModelForCausalLM, MistralPreTrainedModel
+from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaPreTrainedModel
 import pandas as pd
 import torch
 from tqdm import tqdm
@@ -11,14 +11,13 @@ from utils import string_to_list
 from torch import nn
 from src.modelling.llm.data import prepare_input
 
-model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/prometheus-7b-v2.0-2-epoch-label-smoothing-0-15"
-model_name = "prometheus-eval/prometheus-7b-v2.0"
+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2-epoch-label-swapped-labels-aug"
+model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
 # Load model and tokenizer
 model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16,
                                              device_map="cuda:1",
                                              trust_remote_code=True,
                                              attn_implementation="flash_attention_2", )
-# model.load_adapter(model_path)
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 
 
@@ -31,7 +30,7 @@ def mean_pooling(token_embeddings, attention_mask):
     )
 
 
-class MistralClassifier(MistralPreTrainedModel):
+class LlamaClassifier(LlamaPreTrainedModel):
     def __init__(self, model, **kwargs):
         super().__init__(config=model.config, **kwargs)
         self.model = model
@@ -46,7 +45,7 @@ class MistralClassifier(MistralPreTrainedModel):
         return {"logits": self.linear_head(hidden_states)}
 
 
-model = MistralClassifier(model)
+model = LlamaClassifier(model)
 model.load_adapter(model_path)
 # Read and process the dataset
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
