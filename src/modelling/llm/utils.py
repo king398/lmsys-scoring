@@ -71,8 +71,8 @@ def find_all_linear_names(model):
 
     if 'linear_head' in lora_module_names:  # needed for 16-bit
         lora_module_names.remove('linear_head')
-    if "attention_weights" in lora_module_names:
-        lora_module_names.remove("attention_weights")
+    if "p_layer" in lora_module_names:
+        lora_module_names.remove("p_layer")
     return list(lora_module_names)
 
 

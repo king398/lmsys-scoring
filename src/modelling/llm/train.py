@@ -10,18 +10,18 @@ from transformers import AutoTokenizer, TrainingArguments, AutoModelForCausalLM,
 from utils import seed_everything, find_all_linear_names, compute_metrics
 import torch
 from torch.nn import functional as F
-from model import LLamaClassifier
+from model import GemmaClassifier
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 CFG = {
     'seed': 42,
     'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
-    'model_name': 'NousResearch/Hermes-2-Theta-Llama-3-8B',
+    'model_name': 'google/gemma-2-9b-it',
     'max_len': 3096,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Hermes-2-Theta-2-epoch-0-1-smooth',
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-epoch-better-prompt',
     'epochs': 2,
     'lr': 4e-5,
     'mixed_precision': "bf16",
@@ -58,7 +58,7 @@ def main(cfg):
     tokenizer.pad_token = tokenizer.eos_token
     train_df['len'] = train_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
     train_df = train_df[train_df['len'] < cfg['max_len']].reset_index(drop=True)
-    valid_df = df[(df['fold'] == fold) & (df['swapped'] == False)].reset_index(drop=True)
+    valid_df = df[(df['fold'] == fold)].reset_index(drop=True)
     valid_df['len'] = valid_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
     valid_df = valid_df[valid_df['len'] < cfg['max_len']].reset_index(drop=True)
     train_dataset = Dataset.from_dict({"text": train_df['text'], "targets": train_df['label']})
@@ -97,12 +97,12 @@ def main(cfg):
     )
 
     model = AutoModelForCausalLM.from_pretrained(cfg['model_name'], trust_remote_code=True,
-                                                 attn_implementation="flash_attention_2",
-                                                 torch_dtype=torch.float16, quantization_config=quant_config)
+                                                 attn_implementation="eager",
+                                                 torch_dtype=torch.bfloat16, quantization_config=quant_config)
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     model.gradient_checkpointing_enable()
     model.config.use_cache = False
-    model = LLamaClassifier(model, torch_dtype=torch.bfloat16)
+    model = GemmaClassifier(model, torch_dtype=torch.bfloat16)
     print("Linear layers: ", find_all_linear_names(model))
     peft_config = LoraConfig(
         r=64,
@@ -111,7 +111,7 @@ def main(cfg):
         bias="none",
         target_modules=find_all_linear_names(model),
         task_type=TaskType.SEQ_CLS,
-        modules_to_save=["linear_head"],
+        modules_to_save=["linear_head", ],  # Add "p" to modules_to_save
     )
 
     model = get_peft_model(model, peft_config)
@@ -136,7 +136,6 @@ def main(cfg):
     )
 
     trainer.train()
-    print(model)
     trainer.save_model(cfg['model_dir'])
 
 

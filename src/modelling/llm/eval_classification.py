@@ -11,8 +11,8 @@ from utils import string_to_list
 from torch import nn
 from src.modelling.llm.data import prepare_input
 
-model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2-epoch-label-swapped-labels-aug"
-model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Hermes-2-Theta-2-epoch-0-1-smooth"
+model_name = "NousResearch/Hermes-2-Theta-Llama-3-8B"
 # Load model and tokenizer
 model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16,
                                              device_map="cuda:1",
