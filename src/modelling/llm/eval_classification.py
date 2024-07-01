@@ -10,14 +10,14 @@ import numpy as np
 from utils import string_to_list
 from torch import nn
 from src.modelling.llm.data import prepare_input
-
-model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Hermes-2-Theta-2-epoch-0-1-smooth"
-model_name = "NousResearch/Hermes-2-Theta-Llama-3-8B"
+from src.modelling.llm.model import GemmaClassifier
+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-epoch-better-prompt/checkpoint-2580"
+model_name = "google/gemma-2-9b-it"
 # Load model and tokenizer
 model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16,
                                              device_map="cuda:1",
                                              trust_remote_code=True,
-                                             attn_implementation="flash_attention_2", )
+                                             attn_implementation="eager", )
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 
 
@@ -30,22 +30,9 @@ def mean_pooling(token_embeddings, attention_mask):
     )
 
 
-class LlamaClassifier(LlamaPreTrainedModel):
-    def __init__(self, model, **kwargs):
-        super().__init__(config=model.config, **kwargs)
-        self.model = model
-        self.model.lm_head = nn.Identity()
-        self.linear_head = nn.Linear(model.config.hidden_size, 3).to("cuda:1")
-
-    def forward(self, tensors, **kwargs):
-        outputs = self.model(**tensors, return_dict=True)
-        hidden_states = outputs['logits']
-        hidden_states = mean_pooling(hidden_states, tensors['attention_mask']).type(torch.float16)
-
-        return {"logits": self.linear_head(hidden_states)}
 
 
-model = LlamaClassifier(model)
+model = GemmaClassifier(model).to("cuda:1")
 model.load_adapter(model_path)
 # Read and process the dataset
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
@@ -78,11 +65,11 @@ predictions_all = []
 labels = []
 logits_all = None
 for batch in tqdm(dataloader):
-    inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=2560, padding="longest")
+    inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=1536, padding="longest")
     for k, v in inputs.items():
         inputs[k] = v.to("cuda:1")
     with torch.no_grad() and torch.cuda.amp.autocast():
-        outputs = model(inputs)
+        outputs = model(**inputs)
         if logits_all is None:
             logits_all = outputs['logits']
         else:

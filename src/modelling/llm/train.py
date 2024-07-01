@@ -18,7 +18,7 @@ CFG = {
     'seed': 42,
     'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
     'model_name': 'google/gemma-2-9b-it',
-    'max_len': 3096,
+    'max_len': 2048,
     'batch_size': 1,
     'num_classes': 3,
     'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-epoch-better-prompt',
@@ -38,11 +38,13 @@ class CustomTrainer(Trainer):
         outputs = model(**inputs)
         logits = outputs.get('logits')
         loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
+        gc.collect()
         return (loss, outputs) if return_outputs else loss
 
 
 def tokenize_function(examples, tokenizer, max_length):
     tokenized_inputs = tokenizer(examples["text"], truncation=True, padding="longest", max_length=max_length)
+    tokenized_inputs_1
     return tokenized_inputs
 
 
@@ -86,14 +88,13 @@ def main(cfg):
         save_safetensors=True,
         run_name=cfg['model_dir'].split("/")[-1],
         remove_unused_columns=False,
-        eval_strategy="epoch",
-        metric_for_best_model="log_loss",
         label_names=["targets"],
 
     )
 
     quant_config = BitsAndBytesConfig(
-        load_in_8bit=True,
+        load_in_4bit=True,
+
     )
 
     model = AutoModelForCausalLM.from_pretrained(cfg['model_name'], trust_remote_code=True,
@@ -123,7 +124,6 @@ def main(cfg):
     valid_dataset = valid_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']))
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer, )
     train_dataset = train_dataset.remove_columns(["text"])
-    valid_dataset = valid_dataset.remove_columns(["text"])
     trainer = CustomTrainer(
         model=model,
         args=training_args,
@@ -131,7 +131,6 @@ def main(cfg):
         tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
-        eval_dataset=valid_dataset,
 
     )
 

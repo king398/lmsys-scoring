@@ -1,11 +1,8 @@
-import glob
-
-import peft
 import torch
 import pandas as pd
 import gc
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, DataCollatorWithPadding, \
-    LlamaPreTrainedModel
+    Gemma2PreTrainedModel
 from tqdm import tqdm
 from torch.utils.data import DataLoader, Dataset
 from threading import Thread, Lock
@@ -34,38 +31,42 @@ After reviewing the responses from both models, please determine which is the be
 ###Response A: {response_a} 
 ###Response B: {response_b}"""
     text = tokenizer.decode(
-        tokenizer(text, return_tensors="pt", truncation=True, max_length=3000)['input_ids'][0]
+        tokenizer(text, return_tensors="pt", truncation=True, max_length=1480)['input_ids'][0]
     )
 
     messages = [
         {"role": "user", "content": text},
     ]
     text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
-    return text
+    text += "[RESULT]:"
+    inputs = tokenizer.encode_plus(text, return_tensors=None, truncation=True, max_length=cfg['max_len'])
+
+    return inputs['input_ids'], inputs['attention_mask']
 
 
 class EvalDataset(Dataset):
     def __init__(self, df, tokenizer):
-        self.text = df['text']
+        self.input_ids = df['input_ids']
+        self.attention_mask = df['attention_mask']
         self.tokenizer = tokenizer
 
     def __len__(self):
-        return len(self.text)
+        return len(self.input_ids)
 
     def __getitem__(self, idx):
-        if idx >= len(self.text):
-            raise IndexError(f"Index {idx} is out of bounds for dataset of length {len(self.text)}")
-        text = self.text[idx]
-        text += "[RESULT]:"
-        inputs = self.tokenizer.encode_plus(text, return_tensors=None, truncation=True, max_length=cfg['max_len'])
+        if idx >= len(self.input_ids):
+            raise IndexError(f"Index {idx} is out of bounds for dataset of length {len(self.input_ids)}")
+        input_ids = self.input_ids[idx]
+        attention_mask = self.attention_mask[idx]
 
-        return {**inputs}
+        return {'input_ids': input_ids, 'attention_mask': attention_mask}
 
 
 def run_inference(dataset, tokenizer, model, device, results, index):
     predictions = []
     for batch in tqdm(
-            DataLoader(dataset, batch_size=cfg['batch_size'], collate_fn=DataCollatorWithPadding(tokenizer=tokenizer))):
+            DataLoader(dataset, batch_size=cfg['batch_size'], collate_fn=DataCollatorWithPadding(tokenizer=tokenizer),
+                       pin_memory=True, prefetch_factor=8, num_workers=4)):
         for k, v in batch.items():
             batch[k] = v.to(device)
 
@@ -81,7 +82,7 @@ def run_inference(dataset, tokenizer, model, device, results, index):
         results[index] = predictions
 
 
-class LLamaClassifier(LlamaPreTrainedModel):
+class GemmaClassifier(Gemma2PreTrainedModel):
     def __init__(self, model, device, **kwargs):
         super().__init__(config=model.config, **kwargs)
         self.model = model
@@ -106,6 +107,14 @@ class LLamaClassifier(LlamaPreTrainedModel):
 
 
 def main(cfg):
+    tokenizer = AutoTokenizer.from_pretrained(cfg['model_path'], trust_remote_code=True)
+    test_csv = pd.read_csv(cfg['test_csv'], encoding='utf-8')
+    test_csv['prompt'] = test_csv['prompt'].apply(string_to_list)
+    test_csv['response_a'] = test_csv['response_a'].apply(string_to_list)
+    test_csv['response_b'] = test_csv['response_b'].apply(string_to_list)
+
+    # Apply the prepare_input function and add new columns directly
+    test_csv['input_ids'], test_csv['attention_mask'] = zip(*test_csv.apply(prepare_input, axis=1, args=(tokenizer,)))
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
@@ -114,39 +123,16 @@ def main(cfg):
 
     model_1 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.float16,
                                                    device_map="cuda:0", trust_remote_code=True,
-                                                   quantization_config=bnb_config)
-    model_1 = LLamaClassifier(model_1, "cuda:0")
-    model_1 = peft.PeftModel.from_pretrained(model_1, glob.glob(cfg['adapter_path'])[0], adapter_name="adapter_1")
-    model_1.load_adapter(glob.glob(cfg['adapter_path'])[1], adapter_name="adapter_2")
-    model_1.load_adapter(glob.glob(cfg['adapter_path'])[2], adapter_name="adapter_3")
-    model_1.load_adapter(glob.glob(cfg['adapter_path'])[3], adapter_name="adapter_4")
+                                                   quantization_config=bnb_config, attn_implementation="eager", )
+    model_1 = GemmaClassifier(model_1, "cuda:0")
+    model_1.load_adapter(cfg['adapter_path'])
 
-    model_1.add_weighted_adapter(['adapter_1', 'adapter_2', 'adapter_3', 'adapter_4'], [1.0, 1.0, 1.0, 1.0,],
-                                 combination_type="cat",adapter_name="all" )
-    model_1.set_adapter("all")
-    # model_1.gradient_checkpointing_enable()
     model_2 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.float16,
                                                    device_map="cuda:1", trust_remote_code=True,
-                                                   quantization_config=bnb_config)
-    model_2 = LLamaClassifier(model_2, "cuda:1")
-    model_2 = peft.PeftModel.from_pretrained(model_2, glob.glob(cfg['adapter_path'])[0], adapter_name="adapter_1")
-    model_2.load_adapter(glob.glob(cfg['adapter_path'])[1], adapter_name="adapter_2")
-    model_2.load_adapter(glob.glob(cfg['adapter_path'])[2], adapter_name="adapter_3")
-    model_2.load_adapter(glob.glob(cfg['adapter_path'])[3], adapter_name="adapter_4")
+                                                   quantization_config=bnb_config, attn_implementation="eager", )
+    model_2 = GemmaClassifier(model_2, "cuda:1")
+    model_2.load_adapter(cfg['adapter_path'])
 
-    model_2.add_weighted_adapter(['adapter_1', 'adapter_2', 'adapter_3', 'adapter_4'], [1.0, 1.0, 1.0, 1.0,],
-                                 combination_type="cat", adapter_name="all")
-    model_2.set_adapter("all")
-
-
-# model_2.gradient_checkpointing_enable()
-
-    tokenizer = AutoTokenizer.from_pretrained(cfg['model_path'], trust_remote_code=True)
-    test_csv = pd.read_csv(cfg['test_csv'], encoding='utf-8')
-    test_csv['prompt'] = test_csv['prompt'].apply(string_to_list)
-    test_csv['response_a'] = test_csv['response_a'].apply(string_to_list)
-    test_csv['response_b'] = test_csv['response_b'].apply(string_to_list)
-    test_csv['text'] = test_csv.apply(prepare_input, axis=1, args=(tokenizer,))
     tokenizer.pad_token = tokenizer.eos_token
 
     half = len(test_csv) // 2
@@ -175,11 +161,11 @@ def main(cfg):
 
 
 cfg = {
-    "model_path": "/kaggle/input/llama-3/transformers/8b-chat-hf/1",
-    "adapter_path": "/kaggle/input/woong-llm-gogo/*",
-    "max_len": 3096,
+    "model_path": "/kaggle/input/gemma-9b-2",
+    "adapter_path": "/kaggle/input/gemma-2-9b-it-2-epoch",
+    "max_len": 2048,
     "test_csv": "/kaggle/input/lmsys-chatbot-arena/test.csv",
-    "batch_size": 1,
+    "batch_size": 6,
 }
 
 if __name__ == "__main__":

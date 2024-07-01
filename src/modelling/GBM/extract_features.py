@@ -9,44 +9,20 @@ import math
 import numpy as np
 from src.modelling.llm.utils import string_to_list
 from torch import nn
+from src.modelling.llm.model import GemmaClassifier
 from src.modelling.llm.data import prepare_input
 
-model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-3096-2-epoch-label-smoothing"
-model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-epoch-better-prompt/checkpoint-2580"
+model_name = "google/gemma-2-9b-it"
 # Load model and tokenizer
 model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16,
                                              device_map="cuda:1",
                                              trust_remote_code=True,
-                                             attn_implementation="flash_attention_2", )
+                                             attn_implementation="eager", )
 # model.load_adapter(model_path)
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 
-
-def mean_pooling(token_embeddings, attention_mask):
-    input_mask_expanded = (
-        attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-    )
-    return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
-        input_mask_expanded.sum(1), min=1e-9
-    )
-
-
-class LLamaClassifier(LlamaPreTrainedModel):
-    def __init__(self, model, **kwargs):
-        super().__init__(config=model.config, **kwargs)
-        self.model = model
-        self.model.lm_head = nn.Identity()
-        self.linear_head = nn.Linear(model.config.hidden_size, 3).cuda()
-
-    def forward(self, tensors, **kwargs):
-        outputs = self.model(**tensors, return_dict=True)
-        hidden_states = outputs['logits']
-        hidden_states = mean_pooling(hidden_states, tensors['attention_mask']).type(torch.float16)
-
-        return {"hidden_states": hidden_states}
-
-
-model = LLamaClassifier(model)
+model = GemmaClassifier(model,).to("cuda:1")
 model.load_adapter(model_path)
 # Read and process the dataset
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
@@ -83,7 +59,8 @@ for batch in tqdm(dataloader):
     for k, v in inputs.items():
         inputs[k] = v.to("cuda:1")
 
-    outputs = model(inputs)
+    with torch.no_grad() and torch.cuda.amp.autocast():
+        outputs  = model(**inputs)
     hidden_states = outputs['hidden_states']
 
     if hidden_states_all is None:
@@ -95,5 +72,5 @@ for batch in tqdm(dataloader):
 
 hidden_states_all = hidden_states_all.cpu().numpy()
 labels = np.array(labels)
-np.save("../../../data/hidden_states_validation.npy", hidden_states_all)
+np.save("../../../data/hidden_states_validation_gemma.npy", hidden_states_all)
 np.save("../../../data/labels_validation.npy", labels)

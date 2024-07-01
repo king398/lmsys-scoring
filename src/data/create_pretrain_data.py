@@ -5,10 +5,10 @@ import ast
 import transformers
 
 # Load the tokenizer
-tokenizer = transformers.AutoTokenizer.from_pretrained('NousResearch/Hermes-2-Theta-Llama-3-8B')
+tokenizer = transformers.AutoTokenizer.from_pretrained('google/gemma-2-9b-it')
 
 # Load the CSV file with explicit encoding declaration
-df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/output_70b_batch.csv", encoding='utf-8')
+df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/nofold0_output_70b_batch.csv", encoding='utf-8')
 
 df['label'] = np.argmax(df[['winner_model_a', 'winner_model_b', 'winner_tie']].values, axis=1)
 df['fold'] = -1
@@ -39,11 +39,12 @@ After reviewing the responses from both models, please determine which is the  b
 ###Response B: {response_b}"""
     messages = [
         {"role": "user", "content": text},
-        {'role': "assistant", "content": f"[RESULT]: "}
+        {'role': "assistant", "content": f"{row['generated_text']}"}
     ]
     text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
     return text
 
 
 df['text'] = df.apply(create_text, axis=1)
-df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_generated_text_pretrained.csv", index=False,errors='replace')
+df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_generated_text_pretrained.csv",
+          index=False, errors='replace')
