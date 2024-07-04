@@ -5,7 +5,7 @@ import ast
 import transformers
 
 # Load the tokenizer
-tokenizer = transformers.AutoTokenizer.from_pretrained('google/gemma-2-9b-it')
+tokenizer = transformers.AutoTokenizer.from_pretrained('meta-llama/Meta-Llama-3-8B-Instruct')
 
 # Load the CSV file with explicit encoding declaration
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/nofold0_output_70b_batch.csv", encoding='utf-8')

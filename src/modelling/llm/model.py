@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from transformers import LlamaPreTrainedModel, MistralPreTrainedModel, Gemma2PreTrainedModel
+from transformers import LlamaPreTrainedModel, MistralPreTrainedModel,Gemma2PreTrainedModel
 import torch.nn.functional as F
 
 
@@ -37,7 +37,7 @@ class LLamaClassifier(LlamaPreTrainedModel):
         super().__init__(config=model.config, **kwargs)
         self.model = model
         self.model.lm_head = nn.Identity()
-        self.linear_head = nn.Linear(model.config.hidden_size * 2, 3)
+        self.linear_head = nn.Linear(model.config.hidden_size, 3)
 
         self.dtype_linear = torch.bfloat16
 
@@ -51,14 +51,10 @@ class LLamaClassifier(LlamaPreTrainedModel):
             input_mask_expanded.sum(1), min=1e-9
         )
 
-    def forward(self, input_ids_1, attention_mask_1, input_ids_2, attention_mask_2, **kwargs):
-        outputs_1 = self.model(input_ids=input_ids_1, attention_mask=input_ids_1, return_dict=True)
-        hidden_states_1 = outputs_1['logits']
-        hidden_states_1 = mean_pooling(hidden_states_1, attention_mask_1).type(torch.bfloat16)
-        outputs_2 = self.model(input_ids=input_ids_2, attention_mask=input_ids_2, return_dict=True)
-        hidden_states_2 = outputs_2['logits']
-        hidden_states_2 = mean_pooling(hidden_states_2, attention_mask_2).type(torch.bfloat16)
-        hidden_states = torch.cat([hidden_states_1, hidden_states_2], dim=-1)
+    def forward(self, input_ids, attention_mask, **kwargs):
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
+        hidden_states = outputs['logits']
+        hidden_states = mean_pooling(hidden_states, attention_mask).type(torch.bfloat16)
 
         return {"logits": self.linear_head(hidden_states)}
 
@@ -68,7 +64,7 @@ class MistralClassifier(MistralPreTrainedModel):
         super().__init__(config=model.config, **kwargs)
         self.model = model
         self.model.lm_head = nn.Identity()
-        self.linear_head = nn.Linear(model.config.hidden_size * 2, 3)
+        self.linear_head = nn.Linear(model.config.hidden_size, 3)
 
         self.dtype_linear = torch.bfloat16
 
@@ -82,24 +78,18 @@ class MistralClassifier(MistralPreTrainedModel):
             input_mask_expanded.sum(1), min=1e-9
         )
 
-    def forward(self, input_ids_1, attention_mask_1, input_ids_2, attention_mask_2, **kwargs):
-        outputs_1 = self.model(input_ids=input_ids_1, attention_mask=input_ids_1, return_dict=True)
-        hidden_states_1 = outputs_1['logits']
-        hidden_states_1 = mean_pooling(hidden_states_1, attention_mask_1).type(torch.bfloat16)
-        outputs_2 = self.model(input_ids=input_ids_2, attention_mask=input_ids_2, return_dict=True)
-        hidden_states_2 = outputs_2['logits']
-        hidden_states_2 = mean_pooling(hidden_states_2, attention_mask_2).type(torch.bfloat16)
-        hidden_states = torch.cat([hidden_states_1, hidden_states_2], dim=-1)
+    def forward(self, input_ids, attention_mask, **kwargs):
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
+        hidden_states = outputs['logits']
+        hidden_states = mean_pooling(hidden_states, attention_mask).type(torch.bfloat16)
 
         return {"logits": self.linear_head(hidden_states)}
-
-
 class GemmaClassifier(Gemma2PreTrainedModel):
     def __init__(self, model, **kwargs):
         super().__init__(config=model.config, **kwargs)
         self.model = model
         self.model.lm_head = nn.Identity()
-        self.linear_head = nn.Linear(model.config.hidden_size * 2, 3)
+        self.linear_head = nn.Linear(model.config.hidden_size, 3)
 
         self.dtype_linear = torch.bfloat16
 
@@ -113,13 +103,9 @@ class GemmaClassifier(Gemma2PreTrainedModel):
             input_mask_expanded.sum(1), min=1e-9
         )
 
-    def forward(self, input_ids_1, attention_mask_1, input_ids_2, attention_mask_2, **kwargs):
-        outputs_1 = self.model(input_ids=input_ids_1, attention_mask=input_ids_1, return_dict=True)
-        hidden_states_1 = outputs_1['logits']
-        hidden_states_1 = mean_pooling(hidden_states_1, attention_mask_1).type(torch.bfloat16)
-        outputs_2 = self.model(input_ids=input_ids_2, attention_mask=input_ids_2, return_dict=True)
-        hidden_states_2 = outputs_2['logits']
-        hidden_states_2 = mean_pooling(hidden_states_2, attention_mask_2).type(torch.bfloat16)
-        hidden_states = torch.cat([hidden_states_1, hidden_states_2], dim=-1)
+    def forward(self, input_ids, attention_mask, **kwargs):
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
+        hidden_states = outputs['logits']
+        hidden_states = mean_pooling(hidden_states, attention_mask).type(torch.bfloat16)
 
         return {"logits": self.linear_head(hidden_states)}

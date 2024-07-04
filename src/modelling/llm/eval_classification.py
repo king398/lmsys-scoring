@@ -10,15 +10,16 @@ import numpy as np
 from utils import string_to_list
 from torch import nn
 from src.modelling.llm.data import prepare_input
-from src.modelling.llm.model import GemmaClassifier
-model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-epoch-better-prompt/checkpoint-2580"
-model_name = "google/gemma-2-9b-it"
+from src.modelling.llm.model import LLamaClassifier
+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-3-epoch/checkpoint-2007"
+model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
 # Load model and tokenizer
 model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16,
                                              device_map="cuda:1",
                                              trust_remote_code=True,
-                                             attn_implementation="eager", )
+                                             )
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+tokenizer.padding_side = "right"
 
 
 def mean_pooling(token_embeddings, attention_mask):
@@ -32,8 +33,9 @@ def mean_pooling(token_embeddings, attention_mask):
 
 
 
-model = GemmaClassifier(model).to("cuda:1")
+model = LLamaClassifier(model).to("cuda:1")
 model.load_adapter(model_path)
+
 # Read and process the dataset
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
 df = df[df['fold'] == 0].reset_index(drop=True)

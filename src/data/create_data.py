@@ -24,13 +24,9 @@ label_to_response = {0: 'A', 1: 'B', 2: 'tie'}
 
 
 def create_text(row):
-    text = """Analyze the conversation below between a human and two language models (model_a and model_b). The models are each asked to respond to the same prompts which is indicated by Prompt. 
-After reviewing the responses from both models, please determine which model provided better responses overall - model_a, model_b, or was it a tie? Respond with only a single word after <result>: either "A" if model_a was better, "B" if model_b was better, or "tie" if their responses were equally good"""
+    text = """"""
     for prompt, response_a, response_b in zip(row['prompt'], row['response_a'], row['response_b']):
-        text += f"""
-prompt: {prompt} 
-model_a: {response_a} 
-model_b: {response_b} """
+        text += f"Instruction:\n{prompt}\n\nResponse A:\n{response_a}\n\nResponse B:\n{response_b}\n\n"
 
     return text
 

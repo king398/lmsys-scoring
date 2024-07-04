@@ -10,18 +10,18 @@ from transformers import AutoTokenizer, TrainingArguments, AutoModelForCausalLM,
 from utils import seed_everything, find_all_linear_names, compute_metrics
 import torch
 from torch.nn import functional as F
-from model import GemmaClassifier
+from model import LLamaClassifier
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 CFG = {
     'seed': 42,
     'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
-    'model_name': 'google/gemma-2-9b-it',
-    'max_len': 2048,
+    'model_name': 'meta-llama/Meta-Llama-3-8B-Instruct',
+    'max_len':  3096,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-epoch-better-prompt',
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2-epoch-layer-replication',
     'epochs': 2,
     'lr': 4e-5,
     'mixed_precision': "bf16",
@@ -38,13 +38,11 @@ class CustomTrainer(Trainer):
         outputs = model(**inputs)
         logits = outputs.get('logits')
         loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
-        gc.collect()
         return (loss, outputs) if return_outputs else loss
 
 
 def tokenize_function(examples, tokenizer, max_length):
     tokenized_inputs = tokenizer(examples["text"], truncation=True, padding="longest", max_length=max_length)
-    tokenized_inputs_1
     return tokenized_inputs
 
 
@@ -62,7 +60,6 @@ def main(cfg):
     train_df = train_df[train_df['len'] < cfg['max_len']].reset_index(drop=True)
     valid_df = df[(df['fold'] == fold)].reset_index(drop=True)
     valid_df['len'] = valid_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
-    valid_df = valid_df[valid_df['len'] < cfg['max_len']].reset_index(drop=True)
     train_dataset = Dataset.from_dict({"text": train_df['text'], "targets": train_df['label']})
     valid_dataset = Dataset.from_dict({"text": valid_df['text'], "targets": valid_df['label']})
     tokenizer.padding_side = "right"
@@ -88,22 +85,23 @@ def main(cfg):
         save_safetensors=True,
         run_name=cfg['model_dir'].split("/")[-1],
         remove_unused_columns=False,
+        #eval_strategy="epoch",
+        #metric_for_best_model="log_loss",
         label_names=["targets"],
 
     )
 
     quant_config = BitsAndBytesConfig(
         load_in_4bit=True,
-
     )
 
     model = AutoModelForCausalLM.from_pretrained(cfg['model_name'], trust_remote_code=True,
-                                                 attn_implementation="eager",
+                                                 attn_implementation="flash_attention_2",
                                                  torch_dtype=torch.bfloat16, quantization_config=quant_config)
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     model.gradient_checkpointing_enable()
     model.config.use_cache = False
-    model = GemmaClassifier(model, torch_dtype=torch.bfloat16)
+    model = LLamaClassifier(model, torch_dtype=torch.bfloat16)
     print("Linear layers: ", find_all_linear_names(model))
     peft_config = LoraConfig(
         r=64,
@@ -112,14 +110,15 @@ def main(cfg):
         bias="none",
         target_modules=find_all_linear_names(model),
         task_type=TaskType.SEQ_CLS,
-        modules_to_save=["linear_head", ],  # Add "p" to modules_to_save
+        modules_to_save=["linear_head", ],
+        layer_replication=[(0,16),(8,24),(16,32)]
     )
 
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
     for name, param in model.linear_head.named_parameters():
         param.requires_grad = True
-
+    print(model)
     train_dataset = train_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']))
     valid_dataset = valid_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']))
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer, )

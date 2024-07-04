@@ -47,7 +47,6 @@ def main(cfg):
     tokenizer = AutoTokenizer.from_pretrained(cfg['model_name'], add_eos_token=True, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
     train_df['len'] = train_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
-    train_df = train_df[train_df['len'] < cfg['max_len']].reset_index(drop=True)
     train_dataset = Dataset.from_dict({"text": train_df['text']})
     tokenizer.padding_side = "right"
 
@@ -80,7 +79,7 @@ def main(cfg):
     )
 
     model = AutoModelForCausalLM.from_pretrained(cfg['model_name'], trust_remote_code=True,
-                                                 attn_implementation="eager",
+                                                 attn_implementation="flash_attention_2",
                                                  torch_dtype=torch.float16, quantization_config=quant_config)
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     model.gradient_checkpointing_enable()
