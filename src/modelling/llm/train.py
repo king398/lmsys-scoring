@@ -3,14 +3,13 @@ import os
 import warnings
 
 import pandas as pd
+import torch
 from datasets import Dataset
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model, TaskType
 from transformers import AutoTokenizer, TrainingArguments, AutoModelForCausalLM, \
     BitsAndBytesConfig, DataCollatorWithPadding, Trainer
 from utils import seed_everything, find_all_linear_names, compute_metrics
-import torch
-from torch.nn import functional as F
-from model import LLamaClassifier
+from model import *
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -18,10 +17,10 @@ CFG = {
     'seed': 42,
     'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
     'model_name': 'meta-llama/Meta-Llama-3-8B-Instruct',
-    'max_len':  3096,
+    'max_len': 5000,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2-epoch-layer-replication',
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2-epoch-arcface-loss',
     'epochs': 2,
     'lr': 4e-5,
     'mixed_precision': "bf16",
@@ -30,15 +29,48 @@ os.environ['WANDB_PROJECT'] = 'lmsys-winner'
 
 
 class CustomTrainer(Trainer):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, arcface_layer, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.arcface = arcface_layer
 
     def compute_loss(self, model, inputs, return_outputs=False):
         labels = inputs.pop("targets").long()
         outputs = model(**inputs)
         logits = outputs.get('logits')
-        loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
-        return (loss, outputs) if return_outputs else loss
+        hidden_states = outputs.get('hidden_states')
+
+        # Cross-entropy loss
+        ce_loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
+
+        # ArcFace loss
+        arcface_logits = self.arcface(hidden_states, labels)
+        arcface_loss = F.cross_entropy(arcface_logits, labels)
+
+        # Combined loss
+        total_loss =   ce_loss + 0.05 * arcface_loss
+        self.log({"ce_loss": ce_loss.item()})
+        return (total_loss, outputs) if return_outputs else total_loss
+
+
+class ArcFaceLayer(nn.Module):
+    def __init__(self, in_features, out_features, s=30.0, m=0.50):
+        super(ArcFaceLayer, self).__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.s = s
+        self.m = m
+        self.weight = nn.Parameter(torch.FloatTensor(out_features, in_features)).cuda().type(torch.bfloat16)
+        nn.init.xavier_uniform_(self.weight)
+
+    def forward(self, input, label):
+        input = input.type(torch.bfloat16)
+        label = label.type(torch.long)
+        cosine = F.linear(F.normalize(input), F.normalize(self.weight))
+        phi = cosine - self.m
+        output = torch.where(torch.eq(label.unsqueeze(1), torch.arange(self.out_features).to(label.device)),
+                             phi, cosine)
+        output *= self.s
+        return output
 
 
 def tokenize_function(examples, tokenizer, max_length):
@@ -57,7 +89,6 @@ def main(cfg):
     tokenizer = AutoTokenizer.from_pretrained(cfg['model_name'], add_eos_token=True, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
     train_df['len'] = train_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
-    train_df = train_df[train_df['len'] < cfg['max_len']].reset_index(drop=True)
     valid_df = df[(df['fold'] == fold)].reset_index(drop=True)
     valid_df['len'] = valid_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
     train_dataset = Dataset.from_dict({"text": train_df['text'], "targets": train_df['label']})
@@ -85,19 +116,23 @@ def main(cfg):
         save_safetensors=True,
         run_name=cfg['model_dir'].split("/")[-1],
         remove_unused_columns=False,
-        #eval_strategy="epoch",
-        #metric_for_best_model="log_loss",
+        eval_strategy="epoch",
+        metric_for_best_model="log_loss",
         label_names=["targets"],
+        per_device_eval_batch_size=1,
 
     )
 
     quant_config = BitsAndBytesConfig(
         load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_use_double_quant=False,
     )
 
     model = AutoModelForCausalLM.from_pretrained(cfg['model_name'], trust_remote_code=True,
-                                                 attn_implementation="flash_attention_2",
-                                                 torch_dtype=torch.bfloat16, quantization_config=quant_config)
+                                                 torch_dtype=torch.bfloat16, quantization_config=quant_config,
+                                                 attn_implementation="flash_attention_2")
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     model.gradient_checkpointing_enable()
     model.config.use_cache = False
@@ -111,18 +146,18 @@ def main(cfg):
         target_modules=find_all_linear_names(model),
         task_type=TaskType.SEQ_CLS,
         modules_to_save=["linear_head", ],
-        layer_replication=[(0,16),(8,24),(16,32)]
     )
 
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
     for name, param in model.linear_head.named_parameters():
         param.requires_grad = True
-    print(model)
-    train_dataset = train_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']))
-    valid_dataset = valid_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']))
+    train_dataset = train_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']), num_proc=16)
+    valid_dataset = valid_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']), num_proc=16)
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer, )
     train_dataset = train_dataset.remove_columns(["text"])
+    valid_dataset = valid_dataset.remove_columns(["text"])
+    arcface_layer = ArcFaceLayer(4096, cfg['num_classes'])
     trainer = CustomTrainer(
         model=model,
         args=training_args,
@@ -130,6 +165,8 @@ def main(cfg):
         tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
+        eval_dataset=valid_dataset,
+        arcface_layer=arcface_layer
 
     )
 

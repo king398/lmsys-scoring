@@ -6,6 +6,9 @@ import torch
 from transformers import get_linear_schedule_with_warmup, get_cosine_schedule_with_warmup
 import yaml
 import ast
+import evaluate
+
+accuracy = evaluate.load('accuracy')
 
 
 def get_color_escape(r, g, b, background=False):
@@ -35,9 +38,11 @@ def compute_metrics(eval_pred):
     # perform softmax on predictions
     predictions = torch.nn.functional.softmax(torch.tensor(predictions), dim=1).numpy()
 
-    loss = log_loss(labels, predictions)
+    loss = log_loss(y_true=labels, y_pred=predictions)
+    accuracy_score = accuracy.compute(references=labels, predictions=predictions.argmax(axis=1))['accuracy']
     results = {
-        'log_loss': loss
+        'log_loss': loss,
+        'accuracy': accuracy_score,
     }
     return results
 
@@ -74,7 +79,7 @@ def find_all_linear_names(model):
     if "lm_head" in lora_module_names:
         lora_module_names.remove("lm_head")
     if 'linear_head_2' in lora_module_names:  # needed for 16-bit
-            lora_module_names.remove('linear_head_2')
+        lora_module_names.remove('linear_head_2')
 
     return list(lora_module_names)
 

@@ -5,7 +5,7 @@ import ast
 import transformers
 
 # Load the tokenizer
-tokenizer = transformers.AutoTokenizer.from_pretrained('meta-llama/Meta-Llama-3-8B-Instruct')
+tokenizer = transformers.AutoTokenizer.from_pretrained('microsoft/Phi-3-small-128k-instruct')
 
 # Load the CSV file with explicit encoding declaration
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train.csv", encoding='utf-8')

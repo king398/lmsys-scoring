@@ -10,16 +10,15 @@ import numpy as np
 from utils import string_to_list
 from torch import nn
 from src.modelling.llm.data import prepare_input
-from src.modelling.llm.model import LLamaClassifier
-model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-3-epoch/checkpoint-2007"
+
+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2-epoch-label-swapped-labels-aug"
 model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
 # Load model and tokenizer
 model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16,
                                              device_map="cuda:1",
                                              trust_remote_code=True,
-                                             )
+                                             attn_implementation="flash_attention_2", )
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-tokenizer.padding_side = "right"
 
 
 def mean_pooling(token_embeddings, attention_mask):
@@ -31,11 +30,23 @@ def mean_pooling(token_embeddings, attention_mask):
     )
 
 
+class LlamaClassifier(LlamaPreTrainedModel):
+    def __init__(self, model, **kwargs):
+        super().__init__(config=model.config, **kwargs)
+        self.model = model
+        self.model.lm_head = nn.Identity()
+        self.linear_head = nn.Linear(model.config.hidden_size, 3).to("cuda:1")
+
+    def forward(self, tensors, **kwargs):
+        outputs = self.model(**tensors, return_dict=True)
+        hidden_states = outputs['logits']
+        hidden_states = mean_pooling(hidden_states, tensors['attention_mask']).type(torch.float16)
+
+        return {"logits": self.linear_head(hidden_states), "hidden_states": hidden_states}
 
 
-model = LLamaClassifier(model).to("cuda:1")
+model = LlamaClassifier(model)
 model.load_adapter(model_path)
-
 # Read and process the dataset
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
 df = df[df['fold'] == 0].reset_index(drop=True)
@@ -67,11 +78,11 @@ predictions_all = []
 labels = []
 logits_all = None
 for batch in tqdm(dataloader):
-    inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=1536, padding="longest")
+    inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=2560, padding="longest")
     for k, v in inputs.items():
         inputs[k] = v.to("cuda:1")
     with torch.no_grad() and torch.cuda.amp.autocast():
-        outputs = model(**inputs)
+        outputs, hidden_states = model(inputs)
         if logits_all is None:
             logits_all = outputs['logits']
         else:

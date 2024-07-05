@@ -3,14 +3,13 @@ import pandas as pd
 import gc
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, DataCollatorWithPadding, \
     Gemma2PreTrainedModel
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 from torch.utils.data import DataLoader, Dataset
 from threading import Thread, Lock
 import ast
 from torch import nn
 
-torch.backends.cuda.enable_mem_efficient_sdp(False)
-
+torch.backends.cuda.enable_mem_efficient_sdp(True)
 lock = Lock()
 
 
@@ -41,13 +40,14 @@ After reviewing the responses from both models, please determine which is the be
     text += "[RESULT]:"
     inputs = tokenizer.encode_plus(text, return_tensors=None, truncation=True, max_length=cfg['max_len'])
 
-    return inputs['input_ids'], inputs['attention_mask']
+    return inputs['input_ids'], inputs['attention_mask'], len(inputs['input_ids'])
 
 
 class EvalDataset(Dataset):
     def __init__(self, df, tokenizer):
         self.input_ids = df['input_ids']
         self.attention_mask = df['attention_mask']
+        self.id = df['id']
         self.tokenizer = tokenizer
 
     def __len__(self):
@@ -59,14 +59,16 @@ class EvalDataset(Dataset):
         input_ids = self.input_ids[idx]
         attention_mask = self.attention_mask[idx]
 
-        return {'input_ids': input_ids, 'attention_mask': attention_mask}
+        return {'input_ids': input_ids, 'attention_mask': attention_mask, 'id': self.id[idx]}
 
 
-def run_inference(dataset, tokenizer, model, device, results, index):
+def run_inference(dataset, tokenizer, model, device, results, index, ids_list):
     predictions = []
+    ids = []
     for batch in tqdm(
             DataLoader(dataset, batch_size=cfg['batch_size'], collate_fn=DataCollatorWithPadding(tokenizer=tokenizer),
                        pin_memory=True, prefetch_factor=8, num_workers=4)):
+        ids.extend(batch.pop('id'))
         for k, v in batch.items():
             batch[k] = v.to(device)
 
@@ -80,6 +82,7 @@ def run_inference(dataset, tokenizer, model, device, results, index):
 
     with lock:
         results[index] = predictions
+        ids_list[index] = ids
 
 
 class GemmaClassifier(Gemma2PreTrainedModel):
@@ -114,7 +117,8 @@ def main(cfg):
     test_csv['response_b'] = test_csv['response_b'].apply(string_to_list)
 
     # Apply the prepare_input function and add new columns directly
-    test_csv['input_ids'], test_csv['attention_mask'] = zip(*test_csv.apply(prepare_input, axis=1, args=(tokenizer,)))
+    test_csv['input_ids'], test_csv['attention_mask'], test_csv['input_length'] = zip(
+        *test_csv.apply(prepare_input, axis=1, args=(tokenizer,)))
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
@@ -138,14 +142,16 @@ def main(cfg):
     half = len(test_csv) // 2
     test_csv_1 = test_csv.iloc[:half].reset_index(drop=True)
     test_csv_2 = test_csv.iloc[half:].reset_index(drop=True)
-
+    # short by input length
+    test_csv_1 = test_csv_1.sort_values('input_length', ascending=False).reset_index(drop=True)
+    test_csv_2 = test_csv_2.sort_values('input_length', ascending=False).reset_index(drop=True)
     dataset_1 = EvalDataset(test_csv_1, tokenizer)
     dataset_2 = EvalDataset(test_csv_2, tokenizer)
 
     results = {}
-
-    t0 = Thread(target=run_inference, args=(dataset_1, tokenizer, model_1, 'cuda:0', results, 0))
-    t1 = Thread(target=run_inference, args=(dataset_2, tokenizer, model_2, 'cuda:1', results, 1))
+    ids_list = {}
+    t0 = Thread(target=run_inference, args=(dataset_1, tokenizer, model_1, 'cuda:0', results, 0,ids_list))
+    t1 = Thread(target=run_inference, args=(dataset_2, tokenizer, model_2, 'cuda:1', results, 1,ids_list))
 
     t0.start()
     t1.start()
@@ -154,18 +160,20 @@ def main(cfg):
     t1.join()
 
     predictions = results.get(0, []) + results.get(1, [])
-
+    ids = ids_list.get(0, []) + ids_list.get(1, [])
+    # make all the ids strs from tensors
+    ids = [str(i.item()) for i in ids]
     submission_df = pd.DataFrame(predictions, columns=['winner_model_a', 'winner_model_b', 'winner_tie'])
-    submission_df['id'] = test_csv['id']
+    submission_df['id'] = ids
     submission_df.to_csv("submission.csv", index=False)
 
 
 cfg = {
     "model_path": "/kaggle/input/gemma-9b-2",
     "adapter_path": "/kaggle/input/gemma-2-9b-it-2-epoch",
-    "max_len": 2048,
+    "max_len": 1536,
     "test_csv": "/kaggle/input/lmsys-chatbot-arena/test.csv",
-    "batch_size": 6,
+    "batch_size": 4,
 }
 
 if __name__ == "__main__":
