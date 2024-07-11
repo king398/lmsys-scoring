@@ -2,7 +2,7 @@ import torch
 import pandas as pd
 import gc
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, DataCollatorWithPadding, \
-    Gemma2PreTrainedModel
+    LlamaPreTrainedModel
 from tqdm.notebook import tqdm
 from torch.utils.data import DataLoader, Dataset
 from threading import Thread, Lock
@@ -21,23 +21,14 @@ def string_to_list(s):
 
 
 def prepare_input(row, tokenizer):
-    text = """Please analyze the conversation below between a human and two language models which give both respectively give the response ###Response A and ###Response B. The models are each asked to respond to the same prompts which is indicated by ###Instruction:. 
-After reviewing the responses from both models, please determine which is the better response overall - Response_a, Response_b, or was it a tie? Respond with only a single word after [RESULT]: . Either "A" if ###Response A was better, "B" if ###Response B was better, or "tie" if their responses were equally good or bad"""
+    text = f""""""
 
     for prompt, response_a, response_b in zip(row['prompt'], row['response_a'], row['response_b']):
-        text += f"""
-###Instruction:: {prompt} 
-###Response A: {response_a} 
-###Response B: {response_b}"""
-    text = tokenizer.decode(
-        tokenizer(text, return_tensors="pt", truncation=True, max_length=1480)['input_ids'][0]
-    )
-
+        text += f"Instruction:\n{prompt}\n\nResponse A:\n{response_a}\n\nResponse B:\n{response_b}\n\n"
     messages = [
         {"role": "user", "content": text},
     ]
     text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
-    text += "[RESULT]:"
     inputs = tokenizer.encode_plus(text, return_tensors=None, truncation=True, max_length=cfg['max_len'])
 
     return inputs['input_ids'], inputs['attention_mask'], len(inputs['input_ids'])
@@ -62,7 +53,7 @@ class EvalDataset(Dataset):
         return {'input_ids': input_ids, 'attention_mask': attention_mask, 'id': self.id[idx]}
 
 
-def run_inference(dataset, tokenizer, model, device, results, index, ids_list):
+def run_inference(dataset, tokenizer, model, device, results, index):
     predictions = []
     ids = []
     for batch in tqdm(
@@ -81,11 +72,16 @@ def run_inference(dataset, tokenizer, model, device, results, index, ids_list):
         gc.collect()
 
     with lock:
-        results[index] = predictions
-        ids_list[index] = ids
+        update_data = []
+        for i, pred in zip(ids, predictions):
+            update_data.append(
+                {'winner_model_a': pred[0], 'winner_model_b': pred[1], 'winner_tie': pred[2], 'id': str(i)})
+
+        update_df = pd.DataFrame(update_data)
+        results[index] = update_df
 
 
-class GemmaClassifier(Gemma2PreTrainedModel):
+class GemmaClassifier(LlamaPreTrainedModel):
     def __init__(self, model, device, **kwargs):
         super().__init__(config=model.config, **kwargs)
         self.model = model
@@ -104,7 +100,7 @@ class GemmaClassifier(Gemma2PreTrainedModel):
     def forward(self, tensors, **kwargs):
         outputs = self.model(**tensors, return_dict=True)
         hidden_states = outputs['logits']
-        hidden_states = self.mean_pooling(hidden_states, tensors['attention_mask']).type(torch.float16)
+        hidden_states = self.mean_pooling(hidden_states, tensors['attention_mask']).type(torch.bfloat16)
 
         return {"logits": self.linear_head(hidden_states)}
 
@@ -122,19 +118,19 @@ def main(cfg):
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_compute_dtype=torch.bfloat16,
         bnb_4bit_use_double_quant=False)
 
-    model_1 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.float16,
+    model_1 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.bfloat16,
                                                    device_map="cuda:0", trust_remote_code=True,
                                                    quantization_config=bnb_config, attn_implementation="eager", )
-    model_1 = GemmaClassifier(model_1, "cuda:0")
+    model_1 = GemmaClassifier(model_1, "cuda:0").to("cuda:0")
     model_1.load_adapter(cfg['adapter_path'])
 
-    model_2 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.float16,
+    model_2 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.bfloat16,
                                                    device_map="cuda:1", trust_remote_code=True,
                                                    quantization_config=bnb_config, attn_implementation="eager", )
-    model_2 = GemmaClassifier(model_2, "cuda:1")
+    model_2 = GemmaClassifier(model_2, "cuda:1").to("cuda:1")
     model_2.load_adapter(cfg['adapter_path'])
 
     tokenizer.pad_token = tokenizer.eos_token
@@ -147,31 +143,23 @@ def main(cfg):
     test_csv_2 = test_csv_2.sort_values('input_length', ascending=False).reset_index(drop=True)
     dataset_1 = EvalDataset(test_csv_1, tokenizer)
     dataset_2 = EvalDataset(test_csv_2, tokenizer)
-
     results = {}
-    ids_list = {}
-    t0 = Thread(target=run_inference, args=(dataset_1, tokenizer, model_1, 'cuda:0', results, 0,ids_list))
-    t1 = Thread(target=run_inference, args=(dataset_2, tokenizer, model_2, 'cuda:1', results, 1,ids_list))
+    t0 = Thread(target=run_inference, args=(dataset_1, tokenizer, model_1, 'cuda:0', results, 0))
+    t1 = Thread(target=run_inference, args=(dataset_2, tokenizer, model_2, 'cuda:1', results, 1))
 
     t0.start()
     t1.start()
 
     t0.join()
     t1.join()
-
-    predictions = results.get(0, []) + results.get(1, [])
-    ids = ids_list.get(0, []) + ids_list.get(1, [])
-    # make all the ids strs from tensors
-    ids = [str(i.item()) for i in ids]
-    submission_df = pd.DataFrame(predictions, columns=['winner_model_a', 'winner_model_b', 'winner_tie'])
-    submission_df['id'] = ids
+    submission_df = pd.concat([results[0], results[1]], ignore_index=True)
     submission_df.to_csv("submission.csv", index=False)
 
 
 cfg = {
-    "model_path": "/kaggle/input/gemma-9b-2",
-    "adapter_path": "/kaggle/input/gemma-2-9b-it-2-epoch",
-    "max_len": 1536,
+    "model_path": "/kaggle/input/llama-3/transformers/8b-chat-hf/1",
+    "adapter_path": "/kaggle/input/meta-llama-3-8b-instruct-0-2-smoothing/Meta-Llama-3-8B-Instruct-0-2-smoothing",
+    "max_len": 2048,
     "test_csv": "/kaggle/input/lmsys-chatbot-arena/test.csv",
     "batch_size": 4,
 }

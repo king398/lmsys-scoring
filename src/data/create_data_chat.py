@@ -5,7 +5,7 @@ import ast
 import transformers
 
 # Load the tokenizer
-tokenizer = transformers.AutoTokenizer.from_pretrained('microsoft/Phi-3-small-128k-instruct')
+tokenizer = transformers.AutoTokenizer.from_pretrained('google/gemma-2-9b-it')
 
 # Load the CSV file with explicit encoding declaration
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train.csv", encoding='utf-8')

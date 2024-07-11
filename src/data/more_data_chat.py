@@ -26,20 +26,14 @@ label_to_response = {0: 'A', 1: 'B', 2: 'tie'}
 
 
 def create_text(row):
-    text = """Please analyze the conversation below between a human and two language models which give both respectively give the response ###Response A and ###Response B. The models are each asked to respond to the same prompts which is indicated by ###Instruction:. 
-After reviewing the responses from both models, please determine which is the  better responses overall - Response_a, Response_b, or was it a tie? Respond with only a single word after [RESULT]: . Either "A" if ###Response A was better, "B" if ###Response B was better, or "tie" if their responses were equally good or bad"""
+    text = f""""""
 
     for prompt, response_a, response_b in zip(row['prompt'], row['response_a'], row['response_b']):
-        text += f"""
-###Instruction:: {prompt} 
-###Response A: {response_a} 
-###Response B: {response_b}"""
+        text += f"Instruction:\n{prompt}\n\nResponse A:\n{response_a}\n\nResponse B:\n{response_b}\n\n"
     messages = [
         {"role": "user", "content": text},
-        {'role': "assistant", "content": f"[RESULT]:  "}
     ]
-    text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False
-                                         )
+    text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
     return text
 
 
@@ -62,6 +56,10 @@ lmsys_data_extra['prompt'] = lmsys_data_extra['prompt'].apply(string_to_list)
 lmsys_data_extra['response_a'] = lmsys_data_extra['response_a'].apply(string_to_list)
 lmsys_data_extra['response_b'] = lmsys_data_extra['response_b'].apply(string_to_list)
 lmsys_data_extra['text'] = lmsys_data_extra.apply(create_text, axis=1)
+lmsys_data_extra['len'] = lmsys_data_extra['text'].apply(lambda x: len(tokenizer.encode(x)))
+lmsys_data_extra = lmsys_data_extra[lmsys_data_extra['len'] > 1000].reset_index(drop=True)
+print(len(lmsys_data_extra))
 df = pd.concat([df, lmsys_data_extra], ignore_index=True)
 
-df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_extra.csv", index=False, encoding='utf-8',errors='replace')
+df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_extra.csv", index=False, encoding='utf-8',
+          errors='replace')

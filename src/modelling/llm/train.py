@@ -3,7 +3,7 @@ import os
 import warnings
 
 import pandas as pd
-import torch
+import torch.nn
 from datasets import Dataset
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model, TaskType
 from transformers import AutoTokenizer, TrainingArguments, AutoModelForCausalLM, \
@@ -16,11 +16,11 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 CFG = {
     'seed': 42,
     'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
-    'model_name': 'meta-llama/Meta-Llama-3-8B-Instruct',
-    'max_len': 5000,
+    'model_name': 'google/gemma-2-9b-it',
+    'max_len': 2560,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2-epoch-arcface-loss',
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-2560-len',
     'epochs': 2,
     'lr': 4e-5,
     'mixed_precision': "bf16",
@@ -29,48 +29,20 @@ os.environ['WANDB_PROJECT'] = 'lmsys-winner'
 
 
 class CustomTrainer(Trainer):
-    def __init__(self, arcface_layer, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.arcface = arcface_layer
 
     def compute_loss(self, model, inputs, return_outputs=False):
         labels = inputs.pop("targets").long()
         outputs = model(**inputs)
         logits = outputs.get('logits')
-        hidden_states = outputs.get('hidden_states')
 
         # Cross-entropy loss
-        ce_loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
+        loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
 
         # ArcFace loss
-        arcface_logits = self.arcface(hidden_states, labels)
-        arcface_loss = F.cross_entropy(arcface_logits, labels)
 
-        # Combined loss
-        total_loss =   ce_loss + 0.05 * arcface_loss
-        self.log({"ce_loss": ce_loss.item()})
-        return (total_loss, outputs) if return_outputs else total_loss
-
-
-class ArcFaceLayer(nn.Module):
-    def __init__(self, in_features, out_features, s=30.0, m=0.50):
-        super(ArcFaceLayer, self).__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-        self.s = s
-        self.m = m
-        self.weight = nn.Parameter(torch.FloatTensor(out_features, in_features)).cuda().type(torch.bfloat16)
-        nn.init.xavier_uniform_(self.weight)
-
-    def forward(self, input, label):
-        input = input.type(torch.bfloat16)
-        label = label.type(torch.long)
-        cosine = F.linear(F.normalize(input), F.normalize(self.weight))
-        phi = cosine - self.m
-        output = torch.where(torch.eq(label.unsqueeze(1), torch.arange(self.out_features).to(label.device)),
-                             phi, cosine)
-        output *= self.s
-        return output
+        return (loss, outputs) if return_outputs else loss
 
 
 def tokenize_function(examples, tokenizer, max_length):
@@ -132,11 +104,11 @@ def main(cfg):
 
     model = AutoModelForCausalLM.from_pretrained(cfg['model_name'], trust_remote_code=True,
                                                  torch_dtype=torch.bfloat16, quantization_config=quant_config,
-                                                 attn_implementation="flash_attention_2")
+                                                 attn_implementation="eager")
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     model.gradient_checkpointing_enable()
     model.config.use_cache = False
-    model = LLamaClassifier(model, torch_dtype=torch.bfloat16)
+    model = GemmaClassifier(model, torch_dtype=torch.bfloat16)
     print("Linear layers: ", find_all_linear_names(model))
     peft_config = LoraConfig(
         r=64,
@@ -154,10 +126,9 @@ def main(cfg):
         param.requires_grad = True
     train_dataset = train_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']), num_proc=16)
     valid_dataset = valid_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']), num_proc=16)
-    data_collator = DataCollatorWithPadding(tokenizer=tokenizer, )
+    data_collator = DataCollatorWithPadding(tokenizer=tokenizer, pad_to_multiple_of=8)
     train_dataset = train_dataset.remove_columns(["text"])
     valid_dataset = valid_dataset.remove_columns(["text"])
-    arcface_layer = ArcFaceLayer(4096, cfg['num_classes'])
     trainer = CustomTrainer(
         model=model,
         args=training_args,
@@ -166,7 +137,6 @@ def main(cfg):
         data_collator=data_collator,
         compute_metrics=compute_metrics,
         eval_dataset=valid_dataset,
-        arcface_layer=arcface_layer
 
     )
 

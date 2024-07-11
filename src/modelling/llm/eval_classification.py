@@ -1,4 +1,4 @@
-from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaPreTrainedModel
+from transformers import AutoTokenizer, AutoModelForCausalLM, Gemma2PreTrainedModel, BitsAndBytesConfig
 import pandas as pd
 import torch
 from tqdm import tqdm
@@ -11,15 +11,20 @@ from utils import string_to_list
 from torch import nn
 from src.modelling.llm.data import prepare_input
 
-model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2-epoch-label-swapped-labels-aug"
-model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-2560-len"
+model_name = "google/gemma-2-9b-it"
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.float16,
+    bnb_4bit_use_double_quant=False)
+
 # Load model and tokenizer
 model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16,
                                              device_map="cuda:1",
                                              trust_remote_code=True,
-                                             attn_implementation="flash_attention_2", )
+                                             attn_implementation="eager",)
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-
 
 def mean_pooling(token_embeddings, attention_mask):
     input_mask_expanded = (
@@ -29,24 +34,23 @@ def mean_pooling(token_embeddings, attention_mask):
         input_mask_expanded.sum(1), min=1e-9
     )
 
-
-class LlamaClassifier(LlamaPreTrainedModel):
+class GemmaClassifier(Gemma2PreTrainedModel):
     def __init__(self, model, **kwargs):
         super().__init__(config=model.config, **kwargs)
         self.model = model
         self.model.lm_head = nn.Identity()
         self.linear_head = nn.Linear(model.config.hidden_size, 3).to("cuda:1")
 
-    def forward(self, tensors, **kwargs):
+    def forward(self, tensors):
         outputs = self.model(**tensors, return_dict=True)
         hidden_states = outputs['logits']
         hidden_states = mean_pooling(hidden_states, tensors['attention_mask']).type(torch.float16)
 
-        return {"logits": self.linear_head(hidden_states), "hidden_states": hidden_states}
+        return {"logits": self.linear_head(hidden_states)}
 
-
-model = LlamaClassifier(model)
+model = GemmaClassifier(model).to("cuda:1")
 model.load_adapter(model_path)
+
 # Read and process the dataset
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
 df = df[df['fold'] == 0].reset_index(drop=True)
@@ -56,7 +60,6 @@ df['response_a'] = df['response_a'].apply(string_to_list)
 df['response_b'] = df['response_b'].apply(string_to_list)
 
 tokenizer.pad_token = tokenizer.eos_token
-
 
 class EvalDataset(Dataset):
     def __init__(self, df, tokenizer):
@@ -70,19 +73,27 @@ class EvalDataset(Dataset):
     def __getitem__(self, idx):
         return {"text": self.text[idx], "label": self.label[idx]}
 
-
 df['text'] = df.apply(prepare_input, axis=1, args=(tokenizer,))
 dataset = EvalDataset(df, tokenizer)
 dataloader = DataLoader(dataset, batch_size=None, num_workers=8, pin_memory=True)
+
+# Implement reverse truncation
+def reverse_truncate_encode(text, max_length):
+    tokens = tokenizer.encode(text, add_special_tokens=False,)
+    if len(tokens) > max_length:
+        tokens = tokens[-max_length:]
+    return tokenizer.prepare_for_model(tokens, return_tensors="pt", padding="max_length", max_length=max_length)
+
 predictions_all = []
 labels = []
 logits_all = None
 for batch in tqdm(dataloader):
-    inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=2560, padding="longest")
+    inputs = reverse_truncate_encode(batch['text'], max_length=2560)
     for k, v in inputs.items():
         inputs[k] = v.to("cuda:1")
+        print(inputs[k].shape)
     with torch.no_grad() and torch.cuda.amp.autocast():
-        outputs, hidden_states = model(inputs)
+        outputs = model(inputs)
         if logits_all is None:
             logits_all = outputs['logits']
         else:
