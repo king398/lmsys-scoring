@@ -15,12 +15,12 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 CFG = {
     'seed': 42,
-    'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
+    'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_extra.csv',
     'model_name': 'google/gemma-2-9b-it',
-    'max_len': 2560,
+    'max_len': 3096,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-2560-len',
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-3096-extra-data',
     'epochs': 2,
     'lr': 4e-5,
     'mixed_precision': "bf16",
@@ -93,6 +93,7 @@ def main(cfg):
         label_names=["targets"],
         per_device_eval_batch_size=1,
 
+
     )
 
     quant_config = BitsAndBytesConfig(
@@ -137,6 +138,7 @@ def main(cfg):
         data_collator=data_collator,
         compute_metrics=compute_metrics,
         eval_dataset=valid_dataset,
+
 
     )
 

@@ -2,7 +2,6 @@ import torch
 from torch import nn
 from transformers import LlamaPreTrainedModel, MistralPreTrainedModel, Gemma2PreTrainedModel, Phi3PreTrainedModel
 import torch.nn.functional as F
-from modeling_internlm2 import InternLM2PreTrainedModel
 
 
 def mean_pooling(token_embeddings, attention_mask):
@@ -139,4 +138,4 @@ class GemmaClassifier(Gemma2PreTrainedModel):
         hidden_states = outputs['logits']
         hidden_states = mean_pooling(hidden_states, attention_mask).type(self.dtype_linear)
 
-        return {"logits": self.linear_head(hidden_states), }
+        return {"logits": self.linear_head(hidden_states),}

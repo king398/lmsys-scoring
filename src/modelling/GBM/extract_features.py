@@ -2,17 +2,13 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaPreTrainedMod
 import pandas as pd
 import torch
 from tqdm import tqdm
-from sklearn.metrics import log_loss
-import ast
 from torch.utils.data import DataLoader, Dataset
-import math
 import numpy as np
 from src.modelling.llm.utils import string_to_list
-from torch import nn
 from src.modelling.llm.model import GemmaClassifier
 from src.modelling.llm.data import prepare_input
 
-model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-epoch-better-prompt/checkpoint-2580"
+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-2560-len"
 model_name = "google/gemma-2-9b-it"
 # Load model and tokenizer
 model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16,
@@ -26,7 +22,7 @@ model = GemmaClassifier(model,).to("cuda:1")
 model.load_adapter(model_path)
 # Read and process the dataset
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
-df = df[df['fold'] == 0].reset_index(drop=True)
+df = df[df['fold'] != 0].reset_index(drop=True)
 
 df['prompt'] = df['prompt'].apply(string_to_list)
 df['response_a'] = df['response_a'].apply(string_to_list)
@@ -54,7 +50,6 @@ dataloader = DataLoader(dataset, batch_size=None, num_workers=8, pin_memory=True
 labels = []
 hidden_states_all = None
 for batch in tqdm(dataloader):
-    batch['text'] += f"[RESULT]:"
     inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=2560, padding="longest")
     for k, v in inputs.items():
         inputs[k] = v.to("cuda:1")
@@ -74,3 +69,20 @@ hidden_states_all = hidden_states_all.cpu().numpy()
 labels = np.array(labels)
 np.save("../../../data/hidden_states_validation_gemma.npy", hidden_states_all)
 np.save("../../../data/labels_validation.npy", labels)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
