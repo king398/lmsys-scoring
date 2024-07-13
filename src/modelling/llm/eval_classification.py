@@ -11,7 +11,7 @@ from utils import string_to_list
 from torch import nn
 from src.modelling.llm.data import prepare_input
 
-model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-2560-len"
+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-3096-0-05-smoothing"
 model_name = "google/gemma-2-9b-it"
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
@@ -78,20 +78,14 @@ dataset = EvalDataset(df, tokenizer)
 dataloader = DataLoader(dataset, batch_size=None, num_workers=8, pin_memory=True)
 
 # Implement reverse truncation
-def reverse_truncate_encode(text, max_length):
-    tokens = tokenizer.encode(text, add_special_tokens=False,)
-    if len(tokens) > max_length:
-        tokens = tokens[-max_length:]
-    return tokenizer.prepare_for_model(tokens, return_tensors="pt", padding="max_length", max_length=max_length)
 
 predictions_all = []
 labels = []
 logits_all = None
 for batch in tqdm(dataloader):
-    inputs = reverse_truncate_encode(batch['text'], max_length=2560)
+    inputs = tokenizer.encode_plus(batch['text'], max_length=2560,truncation=True,return_tensors="pt")
     for k, v in inputs.items():
         inputs[k] = v.to("cuda:1")
-        print(inputs[k].shape)
     with torch.no_grad() and torch.cuda.amp.autocast():
         outputs = model(inputs)
         if logits_all is None:

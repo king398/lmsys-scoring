@@ -1,737 +1,1371 @@
-diff --git a/src/data/create_data_chat.py b/src/data/create_data_chat.py
-index f7a0aa7..1cdb38e 100644
---- a/src/data/create_data_chat.py
-+++ b/src/data/create_data_chat.py
-@@ -5,7 +5,7 @@ import ast
- import transformers
- 
- # Load the tokenizer
--tokenizer = transformers.AutoTokenizer.from_pretrained('microsoft/Phi-3-small-128k-instruct')
-+tokenizer = transformers.AutoTokenizer.from_pretrained('google/gemma-2-9b-it')
- 
- # Load the CSV file with explicit encoding declaration
- df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train.csv", encoding='utf-8')
 diff --git a/src/data/more_data_chat.py b/src/data/more_data_chat.py
-index 0cda74c..4e439fb 100644
+index d1626c8..c7c60b7 100644
 --- a/src/data/more_data_chat.py
 +++ b/src/data/more_data_chat.py
-@@ -26,20 +26,14 @@ label_to_response = {0: 'A', 1: 'B', 2: 'tie'}
- 
- 
- def create_text(row):
--    text = """Please analyze the conversation below between a human and two language models which give both respectively give the response ###Response A and ###Response B. The models are each asked to respond to the same prompts which is indicated by ###Instruction:. 
--After reviewing the responses from both models, please determine which is the  better responses overall - Response_a, Response_b, or was it a tie? Respond with only a single word after [RESULT]: . Either "A" if ###Response A was better, "B" if ###Response B was better, or "tie" if their responses were equally good or bad"""
-+    text = f""""""
- 
-     for prompt, response_a, response_b in zip(row['prompt'], row['response_a'], row['response_b']):
--        text += f"""
--###Instruction:: {prompt} 
--###Response A: {response_a} 
--###Response B: {response_b}"""
-+        text += f"Instruction:\n{prompt}\n\nResponse A:\n{response_a}\n\nResponse B:\n{response_b}\n\n"
-     messages = [
-         {"role": "user", "content": text},
--        {'role': "assistant", "content": f"[RESULT]:  "}
-     ]
--    text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False
--                                         )
-+    text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
-     return text
- 
- 
-@@ -62,6 +56,10 @@ lmsys_data_extra['prompt'] = lmsys_data_extra['prompt'].apply(string_to_list)
+@@ -56,7 +56,10 @@ lmsys_data_extra['prompt'] = lmsys_data_extra['prompt'].apply(string_to_list)
  lmsys_data_extra['response_a'] = lmsys_data_extra['response_a'].apply(string_to_list)
  lmsys_data_extra['response_b'] = lmsys_data_extra['response_b'].apply(string_to_list)
  lmsys_data_extra['text'] = lmsys_data_extra.apply(create_text, axis=1)
-+lmsys_data_extra['len'] = lmsys_data_extra['text'].apply(lambda x: len(tokenizer.encode(x)))
-+lmsys_data_extra = lmsys_data_extra[lmsys_data_extra['len'] > 1000].reset_index(drop=True)
-+print(len(lmsys_data_extra))
++lmsys_data_extra = lmsys_data_extra[(lmsys_data_extra['model_a'].isin(df['model_a'])) & (lmsys_data_extra['model_b'].isin(df['model_b']))]
++#print(lmsys_data_extra)
  df = pd.concat([df, lmsys_data_extra], ignore_index=True)
  
--df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_extra.csv", index=False, encoding='utf-8',errors='replace')
-+df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_extra.csv", index=False, encoding='utf-8',
-+          errors='replace')
++
+ df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_extra.csv", index=False, encoding='utf-8',
+           errors='replace')
 diff --git a/src/inference.py b/src/inference.py
-index 208a649..11f743e 100644
+index 11f743e..855decb 100644
 --- a/src/inference.py
 +++ b/src/inference.py
-@@ -2,7 +2,7 @@ import torch
+@@ -1,17 +1,34 @@
++# %%writefile gemma_infer.py
+ import torch
  import pandas as pd
  import gc
  from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, DataCollatorWithPadding, \
--    Gemma2PreTrainedModel
-+    LlamaPreTrainedModel
+-    LlamaPreTrainedModel
++    Gemma2PreTrainedModel
  from tqdm.notebook import tqdm
  from torch.utils.data import DataLoader, Dataset
  from threading import Thread, Lock
-@@ -21,23 +21,14 @@ def string_to_list(s):
+ import ast
+ from torch import nn
++import numpy as np
+ 
+ torch.backends.cuda.enable_mem_efficient_sdp(True)
+ lock = Lock()
+ 
++# Updated length bins and temperature values
++LENGTH_BINS = [
++    (33.999, 133.0), (133.0, 196.0), (196.0, 263.0), (263.0, 333.0),
++    (333.0, 406.0), (406.0, 481.0), (481.0, 551.0), (551.0, 623.0),
++    (623.0, 703.0), (703.0, 782.0), (782.0, 878.0), (878.0, 999.0),
++    (999.0, 1194.0), (1194.0, 1639.0), (1639.0, 12162.0)
++]
++
++TEMPERATURE_VALUES = [
++    0.893589034729071, 1.0004855565620758, 1.1263487420741431, 1.1581934258630444,
++    1.04433388339559, 1.1345412861901027, 1.3728830890449788, 1.1908131852105728,
++    1.3053187821060233, 1.2316662831371683, 1.1651808638637695, 1.1928528170888468,
++    1.1644255873393226, 1.210707490377071, 1.4036479861831515
++]
++
+ 
+ def string_to_list(s):
+     try:
+@@ -20,6 +37,13 @@ def string_to_list(s):
+         return []
  
  
++def get_temperature(length):
++    for (bin_start, bin_end), temp in zip(LENGTH_BINS, TEMPERATURE_VALUES):
++        if bin_start < length <= bin_end:
++            return temp
++    return 1.0  # Default temperature if no bin matches
++
++
  def prepare_input(row, tokenizer):
--    text = """Please analyze the conversation below between a human and two language models which give both respectively give the response ###Response A and ###Response B. The models are each asked to respond to the same prompts which is indicated by ###Instruction:. 
--After reviewing the responses from both models, please determine which is the better response overall - Response_a, Response_b, or was it a tie? Respond with only a single word after [RESULT]: . Either "A" if ###Response A was better, "B" if ###Response B was better, or "tie" if their responses were equally good or bad"""
-+    text = f""""""
+     text = f""""""
  
-     for prompt, response_a, response_b in zip(row['prompt'], row['response_a'], row['response_b']):
--        text += f"""
--###Instruction:: {prompt} 
--###Response A: {response_a} 
--###Response B: {response_b}"""
--    text = tokenizer.decode(
--        tokenizer(text, return_tensors="pt", truncation=True, max_length=1480)['input_ids'][0]
--    )
--
-+        text += f"Instruction:\n{prompt}\n\nResponse A:\n{response_a}\n\nResponse B:\n{response_b}\n\n"
-     messages = [
+@@ -29,15 +53,19 @@ def prepare_input(row, tokenizer):
          {"role": "user", "content": text},
      ]
      text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
--    text += "[RESULT]:"
++
      inputs = tokenizer.encode_plus(text, return_tensors=None, truncation=True, max_length=cfg['max_len'])
++    input_length = len(inputs['input_ids'])
++    temperature = get_temperature(input_length)
  
-     return inputs['input_ids'], inputs['attention_mask'], len(inputs['input_ids'])
-@@ -62,7 +53,7 @@ class EvalDataset(Dataset):
-         return {'input_ids': input_ids, 'attention_mask': attention_mask, 'id': self.id[idx]}
+-    return inputs['input_ids'], inputs['attention_mask'], len(inputs['input_ids'])
++    return inputs['input_ids'], inputs['attention_mask'], input_length, temperature
  
  
--def run_inference(dataset, tokenizer, model, device, results, index, ids_list):
-+def run_inference(dataset, tokenizer, model, device, results, index):
+ class EvalDataset(Dataset):
+     def __init__(self, df, tokenizer):
+         self.input_ids = df['input_ids']
+         self.attention_mask = df['attention_mask']
++        self.temperature = df['temperature']
+         self.id = df['id']
+         self.tokenizer = tokenizer
+ 
+@@ -49,39 +77,40 @@ class EvalDataset(Dataset):
+             raise IndexError(f"Index {idx} is out of bounds for dataset of length {len(self.input_ids)}")
+         input_ids = self.input_ids[idx]
+         attention_mask = self.attention_mask[idx]
++        temperature = self.temperature[idx]
+ 
+-        return {'input_ids': input_ids, 'attention_mask': attention_mask, 'id': self.id[idx]}
++        return {'input_ids': input_ids, 'attention_mask': attention_mask, 'temperature': temperature,
++                'id': self.id[idx]}
+ 
+ 
+-def run_inference(dataset, tokenizer, model, device, results, index):
++def run_inference(dataset, tokenizer, model, device, results, index, ids_list):
      predictions = []
      ids = []
      for batch in tqdm(
-@@ -81,11 +72,16 @@ def run_inference(dataset, tokenizer, model, device, results, index, ids_list):
+             DataLoader(dataset, batch_size=cfg['batch_size'], collate_fn=DataCollatorWithPadding(tokenizer=tokenizer),
+                        pin_memory=True, prefetch_factor=8, num_workers=4)):
+         ids.extend(batch.pop('id'))
++        temperatures = batch.pop('temperature').to(device)
+         for k, v in batch.items():
+             batch[k] = v.to(device)
+ 
+         with torch.no_grad() and torch.cuda.amp.autocast():
+             outputs = model(batch)
+-        batch_predictions = outputs['logits'].softmax(dim=-1).detach().cpu().numpy().tolist()
++
++        # Apply temperature scaling before softmax
++        logits = outputs['logits'] / temperatures.unsqueeze(1)
++        batch_predictions = logits.softmax(dim=-1).detach().cpu().numpy().tolist()
+ 
+         predictions.extend(batch_predictions)
+         del batch, outputs
          gc.collect()
  
      with lock:
--        results[index] = predictions
--        ids_list[index] = ids
-+        update_data = []
-+        for i, pred in zip(ids, predictions):
-+            update_data.append(
-+                {'winner_model_a': pred[0], 'winner_model_b': pred[1], 'winner_tie': pred[2], 'id': str(i)})
-+
-+        update_df = pd.DataFrame(update_data)
-+        results[index] = update_df
+-        update_data = []
+-        for i, pred in zip(ids, predictions):
+-            update_data.append(
+-                {'winner_model_a': pred[0], 'winner_model_b': pred[1], 'winner_tie': pred[2], 'id': str(i)})
++        results[index] = predictions
++        ids_list[index] = ids
  
+-        update_df = pd.DataFrame(update_data)
+-        results[index] = update_df
  
--class GemmaClassifier(Gemma2PreTrainedModel):
-+class GemmaClassifier(LlamaPreTrainedModel):
+-
+-class GemmaClassifier(LlamaPreTrainedModel):
++class GemmaClassifier(Gemma2PreTrainedModel):
      def __init__(self, model, device, **kwargs):
          super().__init__(config=model.config, **kwargs)
          self.model = model
-@@ -104,7 +100,7 @@ class GemmaClassifier(Gemma2PreTrainedModel):
+@@ -100,37 +129,40 @@ class GemmaClassifier(LlamaPreTrainedModel):
      def forward(self, tensors, **kwargs):
          outputs = self.model(**tensors, return_dict=True)
          hidden_states = outputs['logits']
--        hidden_states = self.mean_pooling(hidden_states, tensors['attention_mask']).type(torch.float16)
-+        hidden_states = self.mean_pooling(hidden_states, tensors['attention_mask']).type(torch.bfloat16)
+-        hidden_states = self.mean_pooling(hidden_states, tensors['attention_mask']).type(torch.bfloat16)
+-
+-        return {"logits": self.linear_head(hidden_states)}
++        hidden_states = self.mean_pooling(hidden_states, tensors['attention_mask']).type(torch.float16)
++        logits = self.linear_head(hidden_states)
++        return {"logits": logits}
  
-         return {"logits": self.linear_head(hidden_states)}
  
-@@ -122,19 +118,19 @@ def main(cfg):
+ def main(cfg):
+     tokenizer = AutoTokenizer.from_pretrained(cfg['model_path'], trust_remote_code=True)
+     test_csv = pd.read_csv(cfg['test_csv'], encoding='utf-8')
++
+     test_csv['prompt'] = test_csv['prompt'].apply(string_to_list)
+     test_csv['response_a'] = test_csv['response_a'].apply(string_to_list)
+     test_csv['response_b'] = test_csv['response_b'].apply(string_to_list)
+ 
+     # Apply the prepare_input function and add new columns directly
+-    test_csv['input_ids'], test_csv['attention_mask'], test_csv['input_length'] = zip(
++    test_csv['input_ids'], test_csv['attention_mask'], test_csv['input_length'], test_csv['temperature'] = zip(
+         *test_csv.apply(prepare_input, axis=1, args=(tokenizer,)))
++
      bnb_config = BitsAndBytesConfig(
          load_in_4bit=True,
-         bnb_4bit_quant_type="nf4",
--        bnb_4bit_compute_dtype=torch.float16,
-+        bnb_4bit_compute_dtype=torch.bfloat16,
+-        bnb_4bit_quant_type="nf4",
+-        bnb_4bit_compute_dtype=torch.bfloat16,
++        bnb_4bit_quant_type="fp4",
++        bnb_4bit_compute_dtype=torch.float16,
          bnb_4bit_use_double_quant=False)
  
--    model_1 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.float16,
-+    model_1 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.bfloat16,
+-    model_1 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.bfloat16,
++    model_1 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.float16,
                                                     device_map="cuda:0", trust_remote_code=True,
                                                     quantization_config=bnb_config, attn_implementation="eager", )
--    model_1 = GemmaClassifier(model_1, "cuda:0")
-+    model_1 = GemmaClassifier(model_1, "cuda:0").to("cuda:0")
+-    model_1 = GemmaClassifier(model_1, "cuda:0").to("cuda:0")
++    model_1 = GemmaClassifier(model_1, "cuda:0")
      model_1.load_adapter(cfg['adapter_path'])
++    print(model_1)
  
--    model_2 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.float16,
-+    model_2 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.bfloat16,
+-    model_2 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.bfloat16,
++    model_2 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.float16,
                                                     device_map="cuda:1", trust_remote_code=True,
                                                     quantization_config=bnb_config, attn_implementation="eager", )
--    model_2 = GemmaClassifier(model_2, "cuda:1")
-+    model_2 = GemmaClassifier(model_2, "cuda:1").to("cuda:1")
+-    model_2 = GemmaClassifier(model_2, "cuda:1").to("cuda:1")
++    model_2 = GemmaClassifier(model_2, "cuda:1")
      model_2.load_adapter(cfg['adapter_path'])
  
      tokenizer.pad_token = tokenizer.eos_token
-@@ -147,31 +143,23 @@ def main(cfg):
+@@ -138,12 +170,188 @@ def main(cfg):
+     half = len(test_csv) // 2
+     test_csv_1 = test_csv.iloc[:half].reset_index(drop=True)
+     test_csv_2 = test_csv.iloc[half:].reset_index(drop=True)
+-    # short by input length
++    # sort by input length
+     test_csv_1 = test_csv_1.sort_values('input_length', ascending=False).reset_index(drop=True)
      test_csv_2 = test_csv_2.sort_values('input_length', ascending=False).reset_index(drop=True)
      dataset_1 = EvalDataset(test_csv_1, tokenizer)
      dataset_2 = EvalDataset(test_csv_2, tokenizer)
--
-     results = {}
--    ids_list = {}
--    t0 = Thread(target=run_inference, args=(dataset_1, tokenizer, model_1, 'cuda:0', results, 0,ids_list))
--    t1 = Thread(target=run_inference, args=(dataset_2, tokenizer, model_2, 'cuda:1', results, 1,ids_list))
-+    t0 = Thread(target=run_inference, args=(dataset_1, tokenizer, model_1, 'cuda:0', results, 0))
-+    t1 = Thread(target=run_inference, args=(dataset_2, tokenizer, model_2, 'cuda:1', results, 1))
- 
-     t0.start()
-     t1.start()
- 
-     t0.join()
-     t1.join()
--
--    predictions = results.get(0, []) + results.get(1, [])
--    ids = ids_list.get(0, []) + ids_list.get(1, [])
--    # make all the ids strs from tensors
--    ids = [str(i.item()) for i in ids]
--    submission_df = pd.DataFrame(predictions, columns=['winner_model_a', 'winner_model_b', 'winner_tie'])
--    submission_df['id'] = ids
-+    submission_df = pd.concat([results[0], results[1]], ignore_index=True)
-     submission_df.to_csv("submission.csv", index=False)
- 
- 
- cfg = {
--    "model_path": "/kaggle/input/gemma-9b-2",
--    "adapter_path": "/kaggle/input/gemma-2-9b-it-2-epoch",
--    "max_len": 1536,
-+    "model_path": "/kaggle/input/llama-3/transformers/8b-chat-hf/1",
-+    "adapter_path": "/kaggle/input/meta-llama-3-8b-instruct-0-2-smoothing/Meta-Llama-3-8B-Instruct-0-2-smoothing",
-+    "max_len": 2048,
-     "test_csv": "/kaggle/input/lmsys-chatbot-arena/test.csv",
-     "batch_size": 4,
- }
-diff --git a/src/modelling/llm/data.py b/src/modelling/llm/data.py
-index 2d3822b..a189d76 100644
---- a/src/modelling/llm/data.py
-+++ b/src/modelling/llm/data.py
-@@ -1,19 +1,18 @@
--
- from torch.utils.data import Dataset
--def prepare_input(row,tokenizer):
--    text = """Please analyze the conversation below between a human and two language models which give both respectively give the response ###Response A and ###Response B. The models are each asked to respond to the same prompts which is indicated by ###Instruction:. 
--After reviewing the responses from both models, please determine which is the better response overall - Response_a, Response_b, or was it a tie? Respond with only a single word after [RESULT]: . Either "A" if ###Response A was better, "B" if ###Response B was better, or "tie" if their responses were equally good or bad"""
++
++    results = {}
++    ids_list = {}
++    t0 = Thread(target=run_inference, args=(dataset_1, tokenizer, model_1, 'cuda:0', results, 0, ids_list))
++    t1 = Thread(target=run_inference, args=(dataset_2, tokenizer, model_2, 'cuda:1', results, 1, ids_list))
++
++    t0.start()
++    t1.start()
++
++    t0.join()
++    t1.join()
++
++    predictions = results.get(0, []) + results.get(1, [])
++    ids = ids_list.get(0, []) + ids_list.get(1, [])
++    # make all the ids strs from tensors
++    ids = [str(i.item()) for i in ids]
++    submission_df = pd.DataFrame(predictions, columns=['winner_model_a', 'winner_model_b', 'winner_tie'])
++    submission_df['id'] = ids
++    submission_df.to_csv("submission_gemma.csv", index=False)
++    torch.cuda.empty_cache()
++    del model_1, model_2, tokenizer, dataset_1, dataset_2, results, ids_list, submission_df, test_csv, test_csv_1, test_csv_2
++    gc.collect()
++
++
++cfg = {
++    "model_path": "/kaggle/input/gemma-9b-2",
++    "adapter_path": "/kaggle/input/gemma-2-9b-it-smoothing-2560-len",
++    "max_len": 2560,
++    "test_csv": "/kaggle/input/lmsys-chatbot-arena/test.csv",
++    "batch_size": 3,
++}
++
++if __name__ == "__main__":
++    main(cfg)
++# %%writefile llama_infer.py
++import torch
++import pandas as pd
++import gc
++from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, DataCollatorWithPadding, \
++    LlamaPreTrainedModel
++from tqdm import tqdm
++from torch.utils.data import DataLoader, Dataset
++from threading import Thread, Lock
++import ast
++from torch import nn
++
++torch.backends.cuda.enable_mem_efficient_sdp(False)
++
++lock = Lock()
++
++
++def string_to_list(s):
++    try:
++        return ast.literal_eval(s)
++    except ValueError:
++        return []
 +
 +
 +def prepare_input(row, tokenizer):
-+    text = f""""""
- 
-     for prompt, response_a, response_b in zip(row['prompt'], row['response_a'], row['response_b']):
--        text += f"""
--###Instruction:: {prompt} 
--###Response A: {response_a} 
--###Response B: {response_b}"""
-+        text += f"Instruction:\n{prompt}\n\nResponse A:\n{response_a}\n\nResponse B:\n{response_b}\n\n"
-     messages = [
-         {"role": "user", "content": text},
-     ]
-     text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
-     return text
++    text = """Please analyze the conversation below between a human and two language models which give both respectively give the response ###Response A and ###Response B. The models are each asked to respond to the same prompts which is indicated by ###Instruction:. 
++After reviewing the responses from both models, please determine which is the better response overall - Response_a, Response_b, or was it a tie? Respond with only a single word after [RESULT]: . Either "A" if ###Response A was better, "B" if ###Response B was better, or "tie" if their responses were equally good or bad"""
++
++    for prompt, response_a, response_b in zip(row['prompt'], row['response_a'], row['response_b']):
++        text += f"""
++###Instruction:: {prompt} 
++###Response A: {response_a} 
++###Response B: {response_b}"""
++    text = tokenizer.decode(
++        tokenizer(text, return_tensors="pt", truncation=True, max_length=3000)['input_ids'][0]
++    )
++
++    messages = [
++        {"role": "user", "content": text},
++    ]
++    text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
++    return text
 +
 +
- class EvalDataset(Dataset):
-     def __init__(self, df, tokenizer):
-         self.text = df['text']
-diff --git a/src/modelling/llm/eval_classification.py b/src/modelling/llm/eval_classification.py
-index 8e15ac4..2e07ce3 100644
---- a/src/modelling/llm/eval_classification.py
-+++ b/src/modelling/llm/eval_classification.py
-@@ -1,9 +1,8 @@
--from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaPreTrainedModel
-+from transformers import AutoTokenizer, AutoModelForCausalLM, Gemma2PreTrainedModel, BitsAndBytesConfig
- import pandas as pd
- import torch
- from tqdm import tqdm
- from sklearn.metrics import log_loss
--import ast
- from torch.utils.data import DataLoader, Dataset
- import math
- import numpy as np
-@@ -11,42 +10,51 @@ from utils import string_to_list
- from torch import nn
- from src.modelling.llm.data import prepare_input
- 
--model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2-epoch-label-swapped-labels-aug"
--model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
-+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-2560-len"
-+model_name = "google/gemma-2-9b-it"
-+bnb_config = BitsAndBytesConfig(
-+    load_in_4bit=True,
-+    bnb_4bit_quant_type="fp4",
-+    bnb_4bit_compute_dtype=torch.bfloat16,
-+    bnb_4bit_use_double_quant=False)
++class EvalDataset(Dataset):
++    def __init__(self, df, tokenizer):
++        self.text = df['text']
++        self.tokenizer = tokenizer
 +
- # Load model and tokenizer
--model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16,
--                                             device_map="cuda:1",
--                                             trust_remote_code=True,
--                                             attn_implementation="flash_attention_2", )
-+base_model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16,
-+                                                  device_map="auto",
-+                                                  trust_remote_code=True,
-+                                                  attn_implementation="eager", quantization_config=bnb_config,)
- tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-+tokenizer.pad_token = tokenizer.eos_token
- 
--
--def mean_pooling(token_embeddings, attention_mask):
--    input_mask_expanded = (
--        attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
--    )
--    return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
--        input_mask_expanded.sum(1), min=1e-9
--    )
--
--
--class LlamaClassifier(LlamaPreTrainedModel):
-+class GemmaClassifier(Gemma2PreTrainedModel):
-     def __init__(self, model, **kwargs):
-         super().__init__(config=model.config, **kwargs)
-         self.model = model
-         self.model.lm_head = nn.Identity()
--        self.linear_head = nn.Linear(model.config.hidden_size, 3).to("cuda:1")
-+        self.linear_head = nn.Linear(model.config.hidden_size, 3)
- 
--    def forward(self, tensors, **kwargs):
--        outputs = self.model(**tensors, return_dict=True)
--        hidden_states = outputs['logits']
--        hidden_states = mean_pooling(hidden_states, tensors['attention_mask']).type(torch.float16)
-+        self.dtype_linear = torch.bfloat16
++    def __len__(self):
++        return len(self.text)
++
++    def __getitem__(self, idx):
++        if idx >= len(self.text):
++            raise IndexError(f"Index {idx} is out of bounds for dataset of length {len(self.text)}")
++        text = self.text[idx]
++        text += "[RESULT]:"
++        inputs = self.tokenizer.encode_plus(text, return_tensors=None, truncation=True, max_length=cfg['max_len'])
++
++        return {**inputs}
++
++
++def run_inference(dataset, tokenizer, model, device, results, index):
++    predictions = []
++    for batch in tqdm(
++            DataLoader(dataset, batch_size=cfg['batch_size'], collate_fn=DataCollatorWithPadding(tokenizer=tokenizer))):
++        for k, v in batch.items():
++            batch[k] = v.to(device)
++
++        with torch.no_grad() and torch.cuda.amp.autocast():
++            outputs = model(batch)
++        batch_predictions = outputs['logits'].softmax(dim=-1).detach().cpu().numpy().tolist()
++
++        predictions.extend(batch_predictions)
++        del batch, outputs
++        gc.collect()
++
++    with lock:
++        results[index] = predictions
++
++
++class LLamaClassifier(LlamaPreTrainedModel):
++    def __init__(self, model, device, **kwargs):
++        super().__init__(config=model.config, **kwargs)
++        self.model = model
++        self.model.lm_head = nn.Identity()
++        self.linear_head = nn.Linear(model.config.hidden_size, 3).to(device)
 +
 +    @staticmethod
 +    def mean_pooling(token_embeddings, attention_mask):
 +        input_mask_expanded = (
 +            attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
 +        )
- 
--        return {"logits": self.linear_head(hidden_states), "hidden_states": hidden_states}
 +        return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
 +            input_mask_expanded.sum(1), min=1e-9
 +        )
 +
-+    def forward(self, input_ids, attention_mask, **kwargs):
-+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
++    def forward(self, tensors, **kwargs):
++        outputs = self.model(**tensors, return_dict=True)
 +        hidden_states = outputs['logits']
-+        hidden_states = self.mean_pooling(hidden_states, attention_mask).type(torch.bfloat16)
- 
-+        return {"logits": self.linear_head(hidden_states)}
- 
--model = LlamaClassifier(model)
-+model = GemmaClassifier(base_model).to("cuda")
- model.load_adapter(model_path)
++        hidden_states = self.mean_pooling(hidden_states, tensors['attention_mask']).type(torch.float16)
 +
++        return {"logits": self.linear_head(hidden_states)}
++
++
++def main(cfg):
++    bnb_config = BitsAndBytesConfig(
++        load_in_4bit=True,
++        bnb_4bit_quant_type="fp4",
++        bnb_4bit_compute_dtype=torch.float16,
++        bnb_4bit_use_double_quant=False)
++
++    model_1 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.float16,
++                                                   device_map="cuda:0", trust_remote_code=True,
++                                                   quantization_config=bnb_config)
++    model_1 = LLamaClassifier(model_1, "cuda:0")
++    model_1.load_adapter(cfg['adapter_path'])
++    # model_1.gradient_checkpointing_enable()
++    model_2 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.float16,
++                                                   device_map="cuda:1", trust_remote_code=True,
++                                                   quantization_config=bnb_config)
++    model_2 = LLamaClassifier(model_2, "cuda:1")
++    model_2.load_adapter(cfg['adapter_path'])
++
++    # model_2.gradient_checkpointing_enable()
++
++    tokenizer = AutoTokenizer.from_pretrained(cfg['model_path'], trust_remote_code=True)
++    test_csv = pd.read_csv(cfg['test_csv'], encoding='utf-8')
++    test_csv['prompt'] = test_csv['prompt'].apply(string_to_list)
++    test_csv['response_a'] = test_csv['response_a'].apply(string_to_list)
++    test_csv['response_b'] = test_csv['response_b'].apply(string_to_list)
++    test_csv['text'] = test_csv.apply(prepare_input, axis=1, args=(tokenizer,))
++    tokenizer.pad_token = tokenizer.eos_token
++
++    half = len(test_csv) // 2
++    test_csv_1 = test_csv.iloc[:half].reset_index(drop=True)
++    test_csv_2 = test_csv.iloc[half:].reset_index(drop=True)
++
++    dataset_1 = EvalDataset(test_csv_1, tokenizer)
++    dataset_2 = EvalDataset(test_csv_2, tokenizer)
++
+     results = {}
++
+     t0 = Thread(target=run_inference, args=(dataset_1, tokenizer, model_1, 'cuda:0', results, 0))
+     t1 = Thread(target=run_inference, args=(dataset_2, tokenizer, model_2, 'cuda:1', results, 1))
+ 
+@@ -152,17 +360,39 @@ def main(cfg):
+ 
+     t0.join()
+     t1.join()
+-    submission_df = pd.concat([results[0], results[1]], ignore_index=True)
+-    submission_df.to_csv("submission.csv", index=False)
++
++    predictions = results.get(0, []) + results.get(1, [])
++
++    submission_df = pd.DataFrame(predictions, columns=['winner_model_a', 'winner_model_b', 'winner_tie'])
++    submission_df['id'] = test_csv['id']
++    submission_df.to_csv("submission_llama.csv", index=False)
++    del model_1, model_2, tokenizer, dataset_1, dataset_2, results, submission_df, test_csv, test_csv_1, test_csv_2
++    torch.cuda.empty_cache()
++    gc.collect()
+ 
+ 
+ cfg = {
+     "model_path": "/kaggle/input/llama-3/transformers/8b-chat-hf/1",
+-    "adapter_path": "/kaggle/input/meta-llama-3-8b-instruct-0-2-smoothing/Meta-Llama-3-8B-Instruct-0-2-smoothing",
++    "adapter_path": "/kaggle/input/meta-llama-3-8b-instruct-2-epoch-label-smoothing/Meta-Llama-3-8B-Instruct-3096-2-epoch-label-smoothing",
+     "max_len": 2048,
+     "test_csv": "/kaggle/input/lmsys-chatbot-arena/test.csv",
+-    "batch_size": 4,
++    "batch_size": 1,
+ }
+ 
+ if __name__ == "__main__":
+     main(cfg)
++
++import pandas as pd
++
++llama_preds = pd.read_csv("submission_llama.csv")
++gemma_preds = pd.read_csv("submission_gemma.csv")
++llama_preds['id'] = llama_preds['id'].astype(int)
++gemma_preds['id'] = gemma_preds['id'].astype(int)
++llama_preds = llama_preds.sort_values('id').reset_index(drop=True)
++gemma_preds = gemma_preds.sort_values('id').reset_index(drop=True)
++preds_values = llama_preds[['winner_model_a', 'winner_model_b', 'winner_tie']].values * 0.35 + gemma_preds[
++    ['winner_model_a', 'winner_model_b', 'winner_tie']].values * 0.65
++
++submission = pd.DataFrame(preds_values, columns=['winner_model_a', 'winner_model_b', 'winner_tie'])
++submission['id'] = llama_preds['id']
++submission.to_csv("submission.csv", index=False)
+diff --git a/src/modelling/GBM/extract_features.py b/src/modelling/GBM/extract_features.py
+index 78aafb0..df77d83 100644
+--- a/src/modelling/GBM/extract_features.py
++++ b/src/modelling/GBM/extract_features.py
+@@ -8,22 +8,25 @@ from src.modelling.llm.utils import string_to_list
+ from src.modelling.llm.model import GemmaClassifier
+ from src.modelling.llm.data import prepare_input
+ 
++eval = False
+ model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-2560-len"
+ model_name = "google/gemma-2-9b-it"
+ # Load model and tokenizer
++device = "cuda:1"
+ model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16,
+-                                             device_map="cuda:1",
++                                             device_map=device,
+                                              trust_remote_code=True,
+                                              attn_implementation="eager", )
+-# model.load_adapter(model_path)
+ tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+ 
+-model = GemmaClassifier(model,).to("cuda:1")
++model = GemmaClassifier(model, return_features=True).to("cuda:1")
+ model.load_adapter(model_path)
  # Read and process the dataset
  df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
- df = df[df['fold'] == 0].reset_index(drop=True)
-@@ -55,46 +63,80 @@ df['prompt'] = df['prompt'].apply(string_to_list)
+-df = df[df['fold'] != 0].reset_index(drop=True)
+-
++if eval:
++    df = df[df['fold'] == 0].reset_index(drop=True)
++else:
++    df = df[df['fold'] != 0].reset_index(drop=True)
+ df['prompt'] = df['prompt'].apply(string_to_list)
  df['response_a'] = df['response_a'].apply(string_to_list)
  df['response_b'] = df['response_b'].apply(string_to_list)
+@@ -52,11 +55,11 @@ hidden_states_all = None
+ for batch in tqdm(dataloader):
+     inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=2560, padding="longest")
+     for k, v in inputs.items():
+-        inputs[k] = v.to("cuda:1")
++        inputs[k] = v.to(device)
  
--tokenizer.pad_token = tokenizer.eos_token
-+def tokenize_with_reverse_truncation(text, tokenizer, max_length):
-+    # Tokenize with padding and truncation
-+    encoded = tokenizer.encode_plus(
-+        text,
-+        max_length=max_length,
-+        padding='max_length',
-+        truncation='longest_first',
-+        return_tensors='pt'
-+    )
-+
-+    # Reverse the order of tokens (except for special tokens)
-+    input_ids = encoded['input_ids'].squeeze()
-+    attention_mask = encoded['attention_mask'].squeeze()
-+
-+    # Find the first non-padding token
-+    first_non_pad = (input_ids != tokenizer.pad_token_id).nonzero(as_tuple=True)[0][0]
-+
-+    # Reverse the order of non-padding tokens
-+    reversed_ids = torch.cat([
-+        input_ids[:first_non_pad],
-+        input_ids[first_non_pad:].flip(0)
-+    ])
+     with torch.no_grad() and torch.cuda.amp.autocast():
+-        outputs  = model(**inputs)
+-    hidden_states = outputs['hidden_states']
++        outputs = model(**inputs)
++    hidden_states = outputs['features']
  
-+    return {
-+        'input_ids': reversed_ids,
-+        'attention_mask': attention_mask
-+    }
+     if hidden_states_all is None:
+         hidden_states_all = hidden_states
+@@ -65,24 +68,7 @@ for batch in tqdm(dataloader):
  
- class EvalDataset(Dataset):
--    def __init__(self, df, tokenizer):
-+    def __init__(self, df, tokenizer, max_length):
-         self.text = df['text']
-         self.tokenizer = tokenizer
-         self.label = df['label']
-+        self.max_length = max_length
+     labels.append(batch['label'].numpy())
  
-     def __len__(self):
-         return len(self.text)
- 
-     def __getitem__(self, idx):
--        return {"text": self.text[idx], "label": self.label[idx]}
+-hidden_states_all = hidden_states_all.cpu().numpy()
++hidden_states_all = hidden_states_all.type(torch.float16).cpu().numpy()
+ labels = np.array(labels)
+-np.save("../../../data/hidden_states_validation_gemma.npy", hidden_states_all)
+-np.save("../../../data/labels_validation.npy", labels)
 -
-+        encoded = tokenize_with_reverse_truncation(self.text[idx], self.tokenizer, self.max_length)
-+        return {
-+            "input_ids": encoded['input_ids'],
-+            "attention_mask": encoded['attention_mask'],
-+            "label": self.label[idx]
-+        }
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
++np.save("../../../data/hidden_states_train_gemma.npy", hidden_states_all)
++np.save("../../../data/labels_train.npy", labels)
+diff --git a/src/modelling/llm/__pycache__/model.cpython-310.pyc b/src/modelling/llm/__pycache__/model.cpython-310.pyc
+index c6f1821..7564136 100644
+Binary files a/src/modelling/llm/__pycache__/model.cpython-310.pyc and b/src/modelling/llm/__pycache__/model.cpython-310.pyc differ
+diff --git a/src/modelling/llm/__pycache__/utils.cpython-310.pyc b/src/modelling/llm/__pycache__/utils.cpython-310.pyc
+index ff66328..bd35f22 100644
+Binary files a/src/modelling/llm/__pycache__/utils.cpython-310.pyc and b/src/modelling/llm/__pycache__/utils.cpython-310.pyc differ
+diff --git a/src/modelling/llm/eval_classification.py b/src/modelling/llm/eval_classification.py
+index e4adfcf..13d16ff 100644
+--- a/src/modelling/llm/eval_classification.py
++++ b/src/modelling/llm/eval_classification.py
+@@ -11,7 +11,7 @@ from utils import string_to_list
+ from torch import nn
+ from src.modelling.llm.data import prepare_input
  
- df['text'] = df.apply(prepare_input, axis=1, args=(tokenizer,))
--dataset = EvalDataset(df, tokenizer)
-+max_length = 3096  # Or whatever maximum length you want to use
-+dataset = EvalDataset(df, tokenizer, max_length)
+-model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-2560-len"
++model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-3096-0-05-smoothing"
+ model_name = "google/gemma-2-9b-it"
+ bnb_config = BitsAndBytesConfig(
+     load_in_4bit=True,
+@@ -78,20 +78,14 @@ dataset = EvalDataset(df, tokenizer)
  dataloader = DataLoader(dataset, batch_size=None, num_workers=8, pin_memory=True)
-+
+ 
+ # Implement reverse truncation
+-def reverse_truncate_encode(text, max_length):
+-    tokens = tokenizer.encode(text, add_special_tokens=False,)
+-    if len(tokens) > max_length:
+-        tokens = tokens[-max_length:]
+-    return tokenizer.prepare_for_model(tokens, return_tensors="pt", padding="max_length", max_length=max_length)
+ 
  predictions_all = []
  labels = []
  logits_all = None
-+
  for batch in tqdm(dataloader):
--    inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=2560, padding="longest")
--    for k, v in inputs.items():
--        inputs[k] = v.to("cuda:1")
-+    input_ids = batch["input_ids"].to("cuda")
-+    attention_mask = batch["attention_mask"].to("cuda")
-+
+-    inputs = reverse_truncate_encode(batch['text'], max_length=2560)
++    inputs = tokenizer.encode_plus(batch['text'], max_length=2560,truncation=True,return_tensors="pt")
+     for k, v in inputs.items():
+         inputs[k] = v.to("cuda:1")
+-        print(inputs[k].shape)
      with torch.no_grad() and torch.cuda.amp.autocast():
--        outputs, hidden_states = model(inputs)
-+        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+         outputs = model(inputs)
          if logits_all is None:
-             logits_all = outputs['logits']
-         else:
-             logits_all = torch.cat((logits_all, outputs['logits']), dim=0)
-         predictions = outputs['logits'].softmax(dim=-1)
-         predictions_all.append(predictions)
--        labels.append(batch['label'])
-+        labels.extend(batch['label'])
- 
- predictions_all = torch.cat(predictions_all, dim=0).cpu().numpy()
- labels = torch.tensor(labels).cpu().numpy()
- log_loss_all = log_loss(labels, predictions_all)
- print(f"Log loss: {log_loss_all}")
-+
- oof_df = pd.DataFrame(predictions_all, columns=["A", "B", "tie"])
- oof_df["label"] = df["label"]
- oof_df['id'] = df['id']
-@@ -108,4 +150,4 @@ oof_df["log_loss"] = log_losses
- 
- oof_df['perplexity'] = oof_df.apply(lambda x: math.e ** x["log_loss"], axis=1)
- oof_df.to_csv(f"{model_path}/oof.csv", index=False)
--np.savez_compressed(f"{model_path}/logits.npz", logits=logits_all.detach().cpu().numpy())
-+np.savez_compressed(f"{model_path}/logits.npz", logits=logits_all.detach().cpu().numpy())
-\ No newline at end of file
-diff --git a/src/modelling/llm/merge_and_save.py b/src/modelling/llm/merge_and_save.py
-index b6f1bbf..307cd59 100644
---- a/src/modelling/llm/merge_and_save.py
-+++ b/src/modelling/llm/merge_and_save.py
-@@ -2,67 +2,18 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaPreTrainedMod
- import torch
- from peft import PeftModel
- from torch import nn
-+from model import GemmaClassifier
-+base_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-retrained"
- 
--base_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-1-epoch-pretrain"
--
--model = AutoModelForCausalLM.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct",
-+model = AutoModelForCausalLM.from_pretrained("google/gemma-2-9b-it",
-                                              torch_dtype=torch.float16, device_map="cuda:1", )
--
--model = PeftModel.from_pretrained(model, base_path)
--model = model.merge_and_unload()
--model.save_pretrained(f"{base_path}/merged")
--tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct")
--tokenizer.save_pretrained(f"{base_path}/merged")
-+#model = GemmaClassifier(model).to("cuda:1")
-+#model = PeftModel.from_pretrained(model, base_path)
-+#model = model.merge_and_unload()
-+#model.save_pretrained(f"{base_path}/merged")
-+#tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-9b-it")
-+#tokenizer.save_pretrained(f"{base_path}/merged")
- 
- # trial prompt
--prompt = """"<|begin_of_text|><|start_header_id|>user<|end_header_id|>
--
--Please analyze the conversation below between a human and two language models which give both respectively give the response ###Response A and ###Response B. The models are each asked to respond to the same prompts which is indicated by ###Instruction:. 
--After reviewing the responses from both models, please determine which is the  better responses overall - Response_a, Response_b, or was it a tie? 
--###Instruction:: Is it morally right to try to have a certain percentage of females on managerial positions? 
--###Response A: The question of whether it is morally right to aim for a certain percentage of females in managerial positions is a complex ethical issue that involves considerations of fairness, equality, diversity, and discrimination.
--
--Here are some arguments in favor of and against such policies:
--
--**Arguments in favor:**
--
--1. **Correcting Historical Inequities:** Women have historically been underrepresented in leadership roles due to various cultural, institutional, and social barriers. Aiming for a specific percentage can be seen as a corrective measure to address past and ongoing discrimination.
--
--2. **Promoting Diversity:** Diverse leadership teams can enhance decision-making and represent a broader range of perspectives. This can lead to better outcomes for organizations and society as a whole.
--
--3. **Equality of Opportunity:** Setting targets for female representation in management can help ensure that women have equal opportunities to advance in their careers.
--
--4. **Role Modeling:** Increased visibility of female leaders can inspire and encourage other women and girls to pursue leadership roles.
--
--**Arguments against:**
--
--1. **Reverse Discrimination:** Setting a quota for female representation might lead to the perception or reality of reverse discrimination, where men might be overlooked for positions despite being qualified, simply to meet the gender target.
--
--2. **Meritocracy Concerns:** Critics argue that employment and promotion should be based solely on merit and qualifications, not gender. They fear that quotas could compromise the quality of leadership if less qualified individuals are promoted to meet gender targets.
--
--3. **Tokenism:** There is a risk that women appointed to meet quotas might be seen as "tokens," undermining their legitimacy and potentially leading to resentment among colleagues.
--
--4. **Oversimplification of Diversity:** Focusing only on gender might overlook other important aspects of diversity, such as race, ethnicity, socioeconomic background, or sexual orientation.
--
--Ultimately, the morality of aiming for a certain percentage of females in managerial positions depends on one's ethical framework and the context in which such policies are implemented. Proponents of gender diversity targets often argue that these measures are necessary as a transitional mechanism to create a level playing field, while opponents may argue for a "color-blind" or "gender-blind" approach to hiring and promotions.
--
--Organizations and societies must carefully consider the implications of these strategies and strive to implement policies that promote fairness and equality while minimizing negative consequences. It is also important to address the root causes of gender inequality, such as unconscious bias, work-life balance challenges, and lack of supportive policies, to create an environment where everyone has the opportunity to succeed based on their capabilities and contributions. 
--###Response B: As an AI, I don't have personal beliefs or opinions. However, I can tell you that the question of gender quotas in managerial positions is a complex one and positions can vary. Advocates argue that such measures can help correct historical imbalances, promote diversity, and may lead to better decision-making. Critics may argue that positions should be based purely on merit, and that quotas could potentially lead to tokenism or unqualified candidates being promoted. Morality can be subjective and differs from person to person based on their personal beliefs, cultural background, and values. It's a topic with valid arguments on both sides, and it's up to each individual or organization to decide what they believe is right.
--###Instruction:: OK, does pineapple belong on a pizza? Relax and give me fun answer. 
--###Response A: Ah, the age-old culinary conundrum that has divided nations and dinner tables: does pineapple belong on a pizza? The tropical twist of pineapple on pizza, known as Hawaiian pizza, is a hotly debated topic where taste buds battle and pizza purists protest.
--
--Let's slice into the debate with a zest of fun:
--
--**Team Pineapple:** "Absolutely, yes! Pineapple on pizza is like a beach party in your mouth. The sweet juiciness of pineapple chunks frolicking with savory ham or bacon creates a flavor wave that surfs across the cheesy ocean of deliciousness. It's the Mardi Gras of pizzas, where sweet meets savory in a jubilant jamboree!"
--
--**Team No-Pineapple:** "No way, not in a million pizzas! Pineapple is a fruit that should be sunbathing on a tropical fruit platter, not freeloading on a sacred slice of pizza. The thought of warm, melty cheese conspiring with pineapple's sugary mischief is enough to make Italian ancestors turn in their tomato patches. Keep the pineapple in the fruit salad where it belongs!"
--
--At the end of the day, whether pineapple belongs on pizza is a matter of personal taste. Some say it's a match made in heaven, others say it's a culinary crime. But let's face it, in the world of pizza toppings, where you can find everything from anchovies to zucchini, there's room for a little pineapple pizzazz. So, if your taste buds crave that sweet and tangy twist, go ahead and let your pineapple flag fly atop that glorious cheese-covered dough. Bon appÃ©tit, or as they say in pineapple paradise, "Aloha-ppetite!" ???? 
--###Response B: As an AI, I don't eat, so I don't have personal preferences. But, in the world of pizza, the pineapple topping is a hotly debated topic! Some people love the sweet and savory mix it brings to a pizza, a flavor combination made famous by the Hawaiian pizza. Others firmly believe that the sweetness of the fruit has no place on a pizza. It's a pizza puzzle that might never be solved. So, whether pineapple belongs on a pizza or not, it truly depends on your taste buds!<|eot_id|><|start_header_id|>assistant<|end_header_id|>"""
--
--input_ids = tokenizer.encode(prompt, return_tensors="pt", truncation=True, max_length=4096)
--
--with torch.no_grad():
--    input_ids = input_ids.to(model.device)
--    output = model.generate(input_ids, max_length=8012, num_return_sequences=1, do_sample=False)
--    print(tokenizer.decode(output[0]))
-+model = GemmaClassifier.from_pretrained(model).to("cuda:1")
-+model.from_pretrained()
-\ No newline at end of file
 diff --git a/src/modelling/llm/model.py b/src/modelling/llm/model.py
-index 8316c6d..d3f697d 100644
+index 808176b..2875298 100644
 --- a/src/modelling/llm/model.py
 +++ b/src/modelling/llm/model.py
-@@ -4,7 +4,6 @@ from transformers import LlamaPreTrainedModel, MistralPreTrainedModel, Gemma2Pre
- import torch.nn.functional as F
- from modeling_internlm2 import InternLM2PreTrainedModel
+@@ -115,13 +115,14 @@ class MistralClassifier(MistralPreTrainedModel):
  
--
- def mean_pooling(token_embeddings, attention_mask):
-     input_mask_expanded = (
-         attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-@@ -57,7 +56,7 @@ class LLamaClassifier(LlamaPreTrainedModel):
+ 
+ class GemmaClassifier(Gemma2PreTrainedModel):
+-    def __init__(self, model, dtype_linear=torch.bfloat16, **kwargs):
++    def __init__(self, model, dtype_linear=torch.bfloat16, return_features=False, **kwargs):
+         super().__init__(config=model.config, **kwargs)
+         self.model = model
+         self.model.lm_head = nn.Identity()
+         self.linear_head = nn.Linear(model.config.hidden_size, 3)
+ 
+         self.dtype_linear = dtype_linear
++        self.return_features = return_features
+ 
+     @staticmethod
+     def mean_pooling(token_embeddings, attention_mask):
+@@ -138,4 +139,7 @@ class GemmaClassifier(Gemma2PreTrainedModel):
          hidden_states = outputs['logits']
-         hidden_states = mean_pooling(hidden_states, attention_mask).type(torch.bfloat16)
+         hidden_states = mean_pooling(hidden_states, attention_mask).type(self.dtype_linear)
  
--        return {"logits": self.linear_head(hidden_states), "hidden_states": hidden_states}
-+        return {"logits": self.linear_head(hidden_states)}
- 
- 
- class PhiClassifier(Phi3PreTrainedModel):
-@@ -139,4 +138,4 @@ class GemmaClassifier(Gemma2PreTrainedModel):
-         hidden_states = outputs['logits']
-         hidden_states = mean_pooling(hidden_states, attention_mask).type(torch.bfloat16)
- 
--        return {"logits": self.linear_head(hidden_states), "hidden_states": hidden_states}
-+        return {"logits": self.linear_head(hidden_states),}
-diff --git a/src/modelling/llm/train.py b/src/modelling/llm/train.py
-index ee43608..3c5b1ec 100644
---- a/src/modelling/llm/train.py
-+++ b/src/modelling/llm/train.py
-@@ -3,7 +3,7 @@ import os
- import warnings
- 
- import pandas as pd
--import torch
-+import torch.nn
- from datasets import Dataset
- from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model, TaskType
- from transformers import AutoTokenizer, TrainingArguments, AutoModelForCausalLM, \
-@@ -16,11 +16,11 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
- CFG = {
-     'seed': 42,
-     'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
--    'model_name': 'meta-llama/Meta-Llama-3-8B-Instruct',
--    'max_len': 5000,
-+    'model_name': 'google/gemma-2-9b-it',
-+    'max_len': 2560,
-     'batch_size': 1,
-     'num_classes': 3,
--    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2-epoch-arcface-loss',
-+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-2560-len',
-     'epochs': 2,
-     'lr': 4e-5,
-     'mixed_precision': "bf16",
-@@ -29,48 +29,20 @@ os.environ['WANDB_PROJECT'] = 'lmsys-winner'
- 
- 
- class CustomTrainer(Trainer):
--    def __init__(self, arcface_layer, *args, **kwargs):
-+    def __init__(self, *args, **kwargs):
-         super().__init__(*args, **kwargs)
--        self.arcface = arcface_layer
- 
-     def compute_loss(self, model, inputs, return_outputs=False):
-         labels = inputs.pop("targets").long()
-         outputs = model(**inputs)
-         logits = outputs.get('logits')
--        hidden_states = outputs.get('hidden_states')
- 
-         # Cross-entropy loss
--        ce_loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
-+        loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
- 
-         # ArcFace loss
--        arcface_logits = self.arcface(hidden_states, labels)
--        arcface_loss = F.cross_entropy(arcface_logits, labels)
--
--        # Combined loss
--        total_loss =   ce_loss + 0.05 * arcface_loss
--        self.log({"ce_loss": ce_loss.item()})
--        return (total_loss, outputs) if return_outputs else total_loss
--
--
--class ArcFaceLayer(nn.Module):
--    def __init__(self, in_features, out_features, s=30.0, m=0.50):
--        super(ArcFaceLayer, self).__init__()
--        self.in_features = in_features
--        self.out_features = out_features
--        self.s = s
--        self.m = m
--        self.weight = nn.Parameter(torch.FloatTensor(out_features, in_features)).cuda().type(torch.bfloat16)
--        nn.init.xavier_uniform_(self.weight)
--
--    def forward(self, input, label):
--        input = input.type(torch.bfloat16)
--        label = label.type(torch.long)
--        cosine = F.linear(F.normalize(input), F.normalize(self.weight))
--        phi = cosine - self.m
--        output = torch.where(torch.eq(label.unsqueeze(1), torch.arange(self.out_features).to(label.device)),
--                             phi, cosine)
--        output *= self.s
--        return output
+-        return {"logits": self.linear_head(hidden_states),}
++        if self.return_features:
++            return {"logits": self.linear_head(hidden_states), "features": hidden_states}
++        else:
++            return {"logits": self.linear_head(hidden_states)}
+diff --git a/src/optimization/ensemble.py b/src/optimization/ensemble.py
+index e69de29..b7e04ed 100644
+--- a/src/optimization/ensemble.py
++++ b/src/optimization/ensemble.py
+@@ -0,0 +1,27 @@
++import pandas as pd
++import numpy as np
++from sklearn.metrics import log_loss
++import torch
 +
-+        return (loss, outputs) if return_outputs else loss
- 
- 
- def tokenize_function(examples, tokenizer, max_length):
-@@ -132,11 +104,11 @@ def main(cfg):
- 
-     model = AutoModelForCausalLM.from_pretrained(cfg['model_name'], trust_remote_code=True,
-                                                  torch_dtype=torch.bfloat16, quantization_config=quant_config,
--                                                 attn_implementation="flash_attention_2")
-+                                                 attn_implementation="eager")
-     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
-     model.gradient_checkpointing_enable()
-     model.config.use_cache = False
--    model = LLamaClassifier(model, torch_dtype=torch.bfloat16)
-+    model = GemmaClassifier(model, torch_dtype=torch.bfloat16)
-     print("Linear layers: ", find_all_linear_names(model))
-     peft_config = LoraConfig(
-         r=64,
-@@ -154,10 +126,9 @@ def main(cfg):
-         param.requires_grad = True
-     train_dataset = train_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']), num_proc=16)
-     valid_dataset = valid_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']), num_proc=16)
--    data_collator = DataCollatorWithPadding(tokenizer=tokenizer, )
-+    data_collator = DataCollatorWithPadding(tokenizer=tokenizer, pad_to_multiple_of=8)
-     train_dataset = train_dataset.remove_columns(["text"])
-     valid_dataset = valid_dataset.remove_columns(["text"])
--    arcface_layer = ArcFaceLayer(4096, cfg['num_classes'])
-     trainer = CustomTrainer(
-         model=model,
-         args=training_args,
-@@ -166,7 +137,6 @@ def main(cfg):
-         data_collator=data_collator,
-         compute_metrics=compute_metrics,
-         eval_dataset=valid_dataset,
--        arcface_layer=arcface_layer
- 
-     )
- 
++gemma_df = pd.read_csv(
++    "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-2560-len/oof.csv")
++
++llama_preds = torch.softmax(torch.tensor(np.load(
++    "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-3096-2-epoch-label-smoothing/logits.npz")[
++                                             'logits']), dim=1)
++gemma_preds = gemma_df[['A', 'B', 'tie']].values
++
++weights = np.linspace(0, 1, 1001)
++best_weights = None
++best_loss = float('inf')
++for weight in weights:
++    ensemble_preds = weight * llama_preds + (1 - weight) * gemma_preds
++    loss = log_loss(gemma_df['label'], ensemble_preds)
++    print(f"Weight: {weight:.3f}, Loss: {loss:.5f}")
++    if loss < best_loss:
++        best_loss = loss
++        best_weights = weight
++
++print(f"Best loss: {best_loss} with weight: {best_weights}")
++loss = log_loss(gemma_df['label'], gemma_preds)
++print('loss:', loss)
 diff --git a/src/optimization/optuna_optimized.py b/src/optimization/optuna_optimized.py
-index d2f519f..4eb4d7f 100644
+index 4eb4d7f..53561a6 100644
 --- a/src/optimization/optuna_optimized.py
 +++ b/src/optimization/optuna_optimized.py
-@@ -1,28 +1,77 @@
-+import pandas as pd
- import numpy as np
- import optuna
--import pandas as pd
- import torch
- from sklearn.metrics import log_loss
-+from transformers import AutoTokenizer
+@@ -13,7 +13,7 @@ tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-9b-it")
+ df['len'] = df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
+ id_df_dict = dict(zip(df['id'], df['len']))
+ pred_df['len'] = pred_df['id'].map(id_df_dict)
+-pred_df['len_bin'] = pd.qcut(pred_df['len'], q=10)
++pred_df['len_bin'] = pd.qcut(pred_df['len'], q=15)
  
--model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-3096-2-epoch-label-smoothing/"
-+# Load and preprocess data
-+df = pd.read_csv('/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv')
-+pred_df = pd.read_csv('/home/mithil/PycharmProjects/lmsys-scoring/trial.csv')
-+tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-9b-it")
- 
--logits = np.load(f"{model_path}/logits.npz")['logits']
-+df['len'] = df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
-+id_df_dict = dict(zip(df['id'], df['len']))
-+pred_df['len'] = pred_df['id'].map(id_df_dict)
-+pred_df['len_bin'] = pd.qcut(pred_df['len'], q=10)
- 
-+# Load model outputs
-+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-2560-len/"
-+logits = np.load(f"{model_path}/logits.npz")['logits']
- labels = pd.read_csv(f"{model_path}/oof.csv")['label']
- 
-+# Assign bin to each sample
-+bin_edges = pred_df['len_bin'].cat.categories
-+sample_bins = pd.cut(pred_df['len'], bins=bin_edges)
- 
+ # Load model outputs
+ model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-2560-len/"
+@@ -27,7 +27,7 @@ sample_bins = pd.cut(pred_df['len'], bins=bin_edges)
  def objective(trial):
--    clip_value_max = trial.suggest_float("clip_value_max", 0.5, 1.0)
--    clip_value_min = trial.suggest_float("clip_value_min", 0.0, 0.5)
--    temperature = trial.suggest_float("temperature", 0.0, 2.0)
--    logits_ = logits / temperature
--    logits_ = torch.tensor(logits_).softmax(dim=-1).numpy().clip(clip_value_min, clip_value_max)
--    loss = log_loss(labels, logits_, )
-+    # Create a temperature for each bin
-+    temperatures = {
-+        bin_: trial.suggest_float(f"temperature_{i}", 0.1, 2.0)
-+        for i, bin_ in enumerate(bin_edges)
-+    }
-+
-+    # Apply temperature and clipping for each bin
-+    adjusted_logits = []
-+    for bin_, logits_bin in zip(sample_bins, logits):
-+        temp = temperatures[bin_]
-+        logits_bin = logits_bin / temp
-+        probs = torch.tensor(logits_bin).softmax(dim=-1).numpy()
-+        adjusted_logits.append(probs)
-+
-+    adjusted_logits = np.vstack(adjusted_logits)
-+    loss = log_loss(labels, adjusted_logits)
-     return loss
+     # Create a temperature for each bin
+     temperatures = {
+-        bin_: trial.suggest_float(f"temperature_{i}", 0.1, 2.0)
++        bin_: trial.suggest_float(f"temperature_{i}", 0.5, 1.5)
+         for i, bin_ in enumerate(bin_edges)
+     }
  
-+# Create and run the study
-+study = optuna.create_study(direction="minimize",)
-+study.optimize(objective, n_trials=1000,show_progress_bar=True)
-+
-+# Print results
-+print("Best parameters:", study.best_params)
-+print("Best value:", study.best_value)
-+
-+# Calculate and print the baseline loss
-+baseline_loss = log_loss(labels, torch.tensor(logits).softmax(dim=-1).numpy())
-+print("Baseline loss:", baseline_loss)
-+
-+# Calculate average log loss for each bin using optimized parameters
-+best_params = study.best_params
-+
-+binned_losses = []
-+for bin_ in bin_edges:
-+    bin_mask = (sample_bins == bin_)
-+    bin_logits = logits[bin_mask]
-+    bin_labels = labels[bin_mask]
-+
-+    temp = best_params[f'temperature_{list(bin_edges).index(bin_)}']
-+    adjusted_logits = bin_logits / temp
-+    probs = torch.tensor(adjusted_logits).softmax(dim=-1).numpy()
-+
-+    bin_loss = log_loss(bin_labels, probs)
-+    binned_losses.append((bin_, bin_loss))
- 
--study = optuna.create_study(direction="minimize")
--study.optimize(objective, n_trials=250)
--print(study.best_params)
--print(study.best_value)
--print(log_loss(labels, torch.tensor(logits).softmax(dim=-1).numpy()))
-\ No newline at end of file
-+# Print the results
-+print("\nAverage Log Loss for each length bin after optimization:")
-+for bin_, loss in binned_losses:
-+    print(f"Bin {bin_}: Average Log Loss = {loss:.4f}")
-\ No newline at end of file
+diff --git a/text.txt b/text.txt
+index 270e104..1d5d314 100644
+--- a/text.txt
++++ b/text.txt
+@@ -1,737 +0,0 @@
+-diff --git a/src/data/create_data_chat.py b/src/data/create_data_chat.py
+-index f7a0aa7..1cdb38e 100644
+---- a/src/data/create_data_chat.py
+-+++ b/src/data/create_data_chat.py
+-@@ -5,7 +5,7 @@ import ast
+- import transformers
+- 
+- # Load the tokenizer
+--tokenizer = transformers.AutoTokenizer.from_pretrained('microsoft/Phi-3-small-128k-instruct')
+-+tokenizer = transformers.AutoTokenizer.from_pretrained('google/gemma-2-9b-it')
+- 
+- # Load the CSV file with explicit encoding declaration
+- df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train.csv", encoding='utf-8')
+-diff --git a/src/data/more_data_chat.py b/src/data/more_data_chat.py
+-index 0cda74c..4e439fb 100644
+---- a/src/data/more_data_chat.py
+-+++ b/src/data/more_data_chat.py
+-@@ -26,20 +26,14 @@ label_to_response = {0: 'A', 1: 'B', 2: 'tie'}
+- 
+- 
+- def create_text(row):
+--    text = """Please analyze the conversation below between a human and two language models which give both respectively give the response ###Response A and ###Response B. The models are each asked to respond to the same prompts which is indicated by ###Instruction:. 
+--After reviewing the responses from both models, please determine which is the  better responses overall - Response_a, Response_b, or was it a tie? Respond with only a single word after [RESULT]: . Either "A" if ###Response A was better, "B" if ###Response B was better, or "tie" if their responses were equally good or bad"""
+-+    text = f""""""
+- 
+-     for prompt, response_a, response_b in zip(row['prompt'], row['response_a'], row['response_b']):
+--        text += f"""
+--###Instruction:: {prompt} 
+--###Response A: {response_a} 
+--###Response B: {response_b}"""
+-+        text += f"Instruction:\n{prompt}\n\nResponse A:\n{response_a}\n\nResponse B:\n{response_b}\n\n"
+-     messages = [
+-         {"role": "user", "content": text},
+--        {'role': "assistant", "content": f"[RESULT]:  "}
+-     ]
+--    text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False
+--                                         )
+-+    text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
+-     return text
+- 
+- 
+-@@ -62,6 +56,10 @@ lmsys_data_extra['prompt'] = lmsys_data_extra['prompt'].apply(string_to_list)
+- lmsys_data_extra['response_a'] = lmsys_data_extra['response_a'].apply(string_to_list)
+- lmsys_data_extra['response_b'] = lmsys_data_extra['response_b'].apply(string_to_list)
+- lmsys_data_extra['text'] = lmsys_data_extra.apply(create_text, axis=1)
+-+lmsys_data_extra['len'] = lmsys_data_extra['text'].apply(lambda x: len(tokenizer.encode(x)))
+-+lmsys_data_extra = lmsys_data_extra[lmsys_data_extra['len'] > 1000].reset_index(drop=True)
+-+print(len(lmsys_data_extra))
+- df = pd.concat([df, lmsys_data_extra], ignore_index=True)
+- 
+--df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_extra.csv", index=False, encoding='utf-8',errors='replace')
+-+df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_extra.csv", index=False, encoding='utf-8',
+-+          errors='replace')
+-diff --git a/src/inference.py b/src/inference.py
+-index 208a649..11f743e 100644
+---- a/src/inference.py
+-+++ b/src/inference.py
+-@@ -2,7 +2,7 @@ import torch
+- import pandas as pd
+- import gc
+- from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, DataCollatorWithPadding, \
+--    Gemma2PreTrainedModel
+-+    LlamaPreTrainedModel
+- from tqdm.notebook import tqdm
+- from torch.utils.data import DataLoader, Dataset
+- from threading import Thread, Lock
+-@@ -21,23 +21,14 @@ def string_to_list(s):
+- 
+- 
+- def prepare_input(row, tokenizer):
+--    text = """Please analyze the conversation below between a human and two language models which give both respectively give the response ###Response A and ###Response B. The models are each asked to respond to the same prompts which is indicated by ###Instruction:. 
+--After reviewing the responses from both models, please determine which is the better response overall - Response_a, Response_b, or was it a tie? Respond with only a single word after [RESULT]: . Either "A" if ###Response A was better, "B" if ###Response B was better, or "tie" if their responses were equally good or bad"""
+-+    text = f""""""
+- 
+-     for prompt, response_a, response_b in zip(row['prompt'], row['response_a'], row['response_b']):
+--        text += f"""
+--###Instruction:: {prompt} 
+--###Response A: {response_a} 
+--###Response B: {response_b}"""
+--    text = tokenizer.decode(
+--        tokenizer(text, return_tensors="pt", truncation=True, max_length=1480)['input_ids'][0]
+--    )
+--
+-+        text += f"Instruction:\n{prompt}\n\nResponse A:\n{response_a}\n\nResponse B:\n{response_b}\n\n"
+-     messages = [
+-         {"role": "user", "content": text},
+-     ]
+-     text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
+--    text += "[RESULT]:"
+-     inputs = tokenizer.encode_plus(text, return_tensors=None, truncation=True, max_length=cfg['max_len'])
+- 
+-     return inputs['input_ids'], inputs['attention_mask'], len(inputs['input_ids'])
+-@@ -62,7 +53,7 @@ class EvalDataset(Dataset):
+-         return {'input_ids': input_ids, 'attention_mask': attention_mask, 'id': self.id[idx]}
+- 
+- 
+--def run_inference(dataset, tokenizer, model, device, results, index, ids_list):
+-+def run_inference(dataset, tokenizer, model, device, results, index):
+-     predictions = []
+-     ids = []
+-     for batch in tqdm(
+-@@ -81,11 +72,16 @@ def run_inference(dataset, tokenizer, model, device, results, index, ids_list):
+-         gc.collect()
+- 
+-     with lock:
+--        results[index] = predictions
+--        ids_list[index] = ids
+-+        update_data = []
+-+        for i, pred in zip(ids, predictions):
+-+            update_data.append(
+-+                {'winner_model_a': pred[0], 'winner_model_b': pred[1], 'winner_tie': pred[2], 'id': str(i)})
+-+
+-+        update_df = pd.DataFrame(update_data)
+-+        results[index] = update_df
+- 
+- 
+--class GemmaClassifier(Gemma2PreTrainedModel):
+-+class GemmaClassifier(LlamaPreTrainedModel):
+-     def __init__(self, model, device, **kwargs):
+-         super().__init__(config=model.config, **kwargs)
+-         self.model = model
+-@@ -104,7 +100,7 @@ class GemmaClassifier(Gemma2PreTrainedModel):
+-     def forward(self, tensors, **kwargs):
+-         outputs = self.model(**tensors, return_dict=True)
+-         hidden_states = outputs['logits']
+--        hidden_states = self.mean_pooling(hidden_states, tensors['attention_mask']).type(torch.float16)
+-+        hidden_states = self.mean_pooling(hidden_states, tensors['attention_mask']).type(torch.bfloat16)
+- 
+-         return {"logits": self.linear_head(hidden_states)}
+- 
+-@@ -122,19 +118,19 @@ def main(cfg):
+-     bnb_config = BitsAndBytesConfig(
+-         load_in_4bit=True,
+-         bnb_4bit_quant_type="nf4",
+--        bnb_4bit_compute_dtype=torch.float16,
+-+        bnb_4bit_compute_dtype=torch.bfloat16,
+-         bnb_4bit_use_double_quant=False)
+- 
+--    model_1 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.float16,
+-+    model_1 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.bfloat16,
+-                                                    device_map="cuda:0", trust_remote_code=True,
+-                                                    quantization_config=bnb_config, attn_implementation="eager", )
+--    model_1 = GemmaClassifier(model_1, "cuda:0")
+-+    model_1 = GemmaClassifier(model_1, "cuda:0").to("cuda:0")
+-     model_1.load_adapter(cfg['adapter_path'])
+- 
+--    model_2 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.float16,
+-+    model_2 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.bfloat16,
+-                                                    device_map="cuda:1", trust_remote_code=True,
+-                                                    quantization_config=bnb_config, attn_implementation="eager", )
+--    model_2 = GemmaClassifier(model_2, "cuda:1")
+-+    model_2 = GemmaClassifier(model_2, "cuda:1").to("cuda:1")
+-     model_2.load_adapter(cfg['adapter_path'])
+- 
+-     tokenizer.pad_token = tokenizer.eos_token
+-@@ -147,31 +143,23 @@ def main(cfg):
+-     test_csv_2 = test_csv_2.sort_values('input_length', ascending=False).reset_index(drop=True)
+-     dataset_1 = EvalDataset(test_csv_1, tokenizer)
+-     dataset_2 = EvalDataset(test_csv_2, tokenizer)
+--
+-     results = {}
+--    ids_list = {}
+--    t0 = Thread(target=run_inference, args=(dataset_1, tokenizer, model_1, 'cuda:0', results, 0,ids_list))
+--    t1 = Thread(target=run_inference, args=(dataset_2, tokenizer, model_2, 'cuda:1', results, 1,ids_list))
+-+    t0 = Thread(target=run_inference, args=(dataset_1, tokenizer, model_1, 'cuda:0', results, 0))
+-+    t1 = Thread(target=run_inference, args=(dataset_2, tokenizer, model_2, 'cuda:1', results, 1))
+- 
+-     t0.start()
+-     t1.start()
+- 
+-     t0.join()
+-     t1.join()
+--
+--    predictions = results.get(0, []) + results.get(1, [])
+--    ids = ids_list.get(0, []) + ids_list.get(1, [])
+--    # make all the ids strs from tensors
+--    ids = [str(i.item()) for i in ids]
+--    submission_df = pd.DataFrame(predictions, columns=['winner_model_a', 'winner_model_b', 'winner_tie'])
+--    submission_df['id'] = ids
+-+    submission_df = pd.concat([results[0], results[1]], ignore_index=True)
+-     submission_df.to_csv("submission.csv", index=False)
+- 
+- 
+- cfg = {
+--    "model_path": "/kaggle/input/gemma-9b-2",
+--    "adapter_path": "/kaggle/input/gemma-2-9b-it-2-epoch",
+--    "max_len": 1536,
+-+    "model_path": "/kaggle/input/llama-3/transformers/8b-chat-hf/1",
+-+    "adapter_path": "/kaggle/input/meta-llama-3-8b-instruct-0-2-smoothing/Meta-Llama-3-8B-Instruct-0-2-smoothing",
+-+    "max_len": 2048,
+-     "test_csv": "/kaggle/input/lmsys-chatbot-arena/test.csv",
+-     "batch_size": 4,
+- }
+-diff --git a/src/modelling/llm/data.py b/src/modelling/llm/data.py
+-index 2d3822b..a189d76 100644
+---- a/src/modelling/llm/data.py
+-+++ b/src/modelling/llm/data.py
+-@@ -1,19 +1,18 @@
+--
+- from torch.utils.data import Dataset
+--def prepare_input(row,tokenizer):
+--    text = """Please analyze the conversation below between a human and two language models which give both respectively give the response ###Response A and ###Response B. The models are each asked to respond to the same prompts which is indicated by ###Instruction:. 
+--After reviewing the responses from both models, please determine which is the better response overall - Response_a, Response_b, or was it a tie? Respond with only a single word after [RESULT]: . Either "A" if ###Response A was better, "B" if ###Response B was better, or "tie" if their responses were equally good or bad"""
+-+
+-+
+-+def prepare_input(row, tokenizer):
+-+    text = f""""""
+- 
+-     for prompt, response_a, response_b in zip(row['prompt'], row['response_a'], row['response_b']):
+--        text += f"""
+--###Instruction:: {prompt} 
+--###Response A: {response_a} 
+--###Response B: {response_b}"""
+-+        text += f"Instruction:\n{prompt}\n\nResponse A:\n{response_a}\n\nResponse B:\n{response_b}\n\n"
+-     messages = [
+-         {"role": "user", "content": text},
+-     ]
+-     text = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
+-     return text
+-+
+-+
+- class EvalDataset(Dataset):
+-     def __init__(self, df, tokenizer):
+-         self.text = df['text']
+-diff --git a/src/modelling/llm/eval_classification.py b/src/modelling/llm/eval_classification.py
+-index 8e15ac4..2e07ce3 100644
+---- a/src/modelling/llm/eval_classification.py
+-+++ b/src/modelling/llm/eval_classification.py
+-@@ -1,9 +1,8 @@
+--from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaPreTrainedModel
+-+from transformers import AutoTokenizer, AutoModelForCausalLM, Gemma2PreTrainedModel, BitsAndBytesConfig
+- import pandas as pd
+- import torch
+- from tqdm import tqdm
+- from sklearn.metrics import log_loss
+--import ast
+- from torch.utils.data import DataLoader, Dataset
+- import math
+- import numpy as np
+-@@ -11,42 +10,51 @@ from utils import string_to_list
+- from torch import nn
+- from src.modelling.llm.data import prepare_input
+- 
+--model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2-epoch-label-swapped-labels-aug"
+--model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
+-+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-2560-len"
+-+model_name = "google/gemma-2-9b-it"
+-+bnb_config = BitsAndBytesConfig(
+-+    load_in_4bit=True,
+-+    bnb_4bit_quant_type="fp4",
+-+    bnb_4bit_compute_dtype=torch.bfloat16,
+-+    bnb_4bit_use_double_quant=False)
+-+
+- # Load model and tokenizer
+--model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16,
+--                                             device_map="cuda:1",
+--                                             trust_remote_code=True,
+--                                             attn_implementation="flash_attention_2", )
+-+base_model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16,
+-+                                                  device_map="auto",
+-+                                                  trust_remote_code=True,
+-+                                                  attn_implementation="eager", quantization_config=bnb_config,)
+- tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+-+tokenizer.pad_token = tokenizer.eos_token
+- 
+--
+--def mean_pooling(token_embeddings, attention_mask):
+--    input_mask_expanded = (
+--        attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+--    )
+--    return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
+--        input_mask_expanded.sum(1), min=1e-9
+--    )
+--
+--
+--class LlamaClassifier(LlamaPreTrainedModel):
+-+class GemmaClassifier(Gemma2PreTrainedModel):
+-     def __init__(self, model, **kwargs):
+-         super().__init__(config=model.config, **kwargs)
+-         self.model = model
+-         self.model.lm_head = nn.Identity()
+--        self.linear_head = nn.Linear(model.config.hidden_size, 3).to("cuda:1")
+-+        self.linear_head = nn.Linear(model.config.hidden_size, 3)
+- 
+--    def forward(self, tensors, **kwargs):
+--        outputs = self.model(**tensors, return_dict=True)
+--        hidden_states = outputs['logits']
+--        hidden_states = mean_pooling(hidden_states, tensors['attention_mask']).type(torch.float16)
+-+        self.dtype_linear = torch.bfloat16
+-+
+-+    @staticmethod
+-+    def mean_pooling(token_embeddings, attention_mask):
+-+        input_mask_expanded = (
+-+            attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+-+        )
+- 
+--        return {"logits": self.linear_head(hidden_states), "hidden_states": hidden_states}
+-+        return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
+-+            input_mask_expanded.sum(1), min=1e-9
+-+        )
+-+
+-+    def forward(self, input_ids, attention_mask, **kwargs):
+-+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
+-+        hidden_states = outputs['logits']
+-+        hidden_states = self.mean_pooling(hidden_states, attention_mask).type(torch.bfloat16)
+- 
+-+        return {"logits": self.linear_head(hidden_states)}
+- 
+--model = LlamaClassifier(model)
+-+model = GemmaClassifier(base_model).to("cuda")
+- model.load_adapter(model_path)
+-+
+- # Read and process the dataset
+- df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv", encoding='utf-8')
+- df = df[df['fold'] == 0].reset_index(drop=True)
+-@@ -55,46 +63,80 @@ df['prompt'] = df['prompt'].apply(string_to_list)
+- df['response_a'] = df['response_a'].apply(string_to_list)
+- df['response_b'] = df['response_b'].apply(string_to_list)
+- 
+--tokenizer.pad_token = tokenizer.eos_token
+-+def tokenize_with_reverse_truncation(text, tokenizer, max_length):
+-+    # Tokenize with padding and truncation
+-+    encoded = tokenizer.encode_plus(
+-+        text,
+-+        max_length=max_length,
+-+        padding='max_length',
+-+        truncation='longest_first',
+-+        return_tensors='pt'
+-+    )
+-+
+-+    # Reverse the order of tokens (except for special tokens)
+-+    input_ids = encoded['input_ids'].squeeze()
+-+    attention_mask = encoded['attention_mask'].squeeze()
+-+
+-+    # Find the first non-padding token
+-+    first_non_pad = (input_ids != tokenizer.pad_token_id).nonzero(as_tuple=True)[0][0]
+-+
+-+    # Reverse the order of non-padding tokens
+-+    reversed_ids = torch.cat([
+-+        input_ids[:first_non_pad],
+-+        input_ids[first_non_pad:].flip(0)
+-+    ])
+- 
+-+    return {
+-+        'input_ids': reversed_ids,
+-+        'attention_mask': attention_mask
+-+    }
+- 
+- class EvalDataset(Dataset):
+--    def __init__(self, df, tokenizer):
+-+    def __init__(self, df, tokenizer, max_length):
+-         self.text = df['text']
+-         self.tokenizer = tokenizer
+-         self.label = df['label']
+-+        self.max_length = max_length
+- 
+-     def __len__(self):
+-         return len(self.text)
+- 
+-     def __getitem__(self, idx):
+--        return {"text": self.text[idx], "label": self.label[idx]}
+--
+-+        encoded = tokenize_with_reverse_truncation(self.text[idx], self.tokenizer, self.max_length)
+-+        return {
+-+            "input_ids": encoded['input_ids'],
+-+            "attention_mask": encoded['attention_mask'],
+-+            "label": self.label[idx]
+-+        }
+- 
+- df['text'] = df.apply(prepare_input, axis=1, args=(tokenizer,))
+--dataset = EvalDataset(df, tokenizer)
+-+max_length = 3096  # Or whatever maximum length you want to use
+-+dataset = EvalDataset(df, tokenizer, max_length)
+- dataloader = DataLoader(dataset, batch_size=None, num_workers=8, pin_memory=True)
+-+
+- predictions_all = []
+- labels = []
+- logits_all = None
+-+
+- for batch in tqdm(dataloader):
+--    inputs = tokenizer(batch['text'], return_tensors="pt", truncation=True, max_length=2560, padding="longest")
+--    for k, v in inputs.items():
+--        inputs[k] = v.to("cuda:1")
+-+    input_ids = batch["input_ids"].to("cuda")
+-+    attention_mask = batch["attention_mask"].to("cuda")
+-+
+-     with torch.no_grad() and torch.cuda.amp.autocast():
+--        outputs, hidden_states = model(inputs)
+-+        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+-         if logits_all is None:
+-             logits_all = outputs['logits']
+-         else:
+-             logits_all = torch.cat((logits_all, outputs['logits']), dim=0)
+-         predictions = outputs['logits'].softmax(dim=-1)
+-         predictions_all.append(predictions)
+--        labels.append(batch['label'])
+-+        labels.extend(batch['label'])
+- 
+- predictions_all = torch.cat(predictions_all, dim=0).cpu().numpy()
+- labels = torch.tensor(labels).cpu().numpy()
+- log_loss_all = log_loss(labels, predictions_all)
+- print(f"Log loss: {log_loss_all}")
+-+
+- oof_df = pd.DataFrame(predictions_all, columns=["A", "B", "tie"])
+- oof_df["label"] = df["label"]
+- oof_df['id'] = df['id']
+-@@ -108,4 +150,4 @@ oof_df["log_loss"] = log_losses
+- 
+- oof_df['perplexity'] = oof_df.apply(lambda x: math.e ** x["log_loss"], axis=1)
+- oof_df.to_csv(f"{model_path}/oof.csv", index=False)
+--np.savez_compressed(f"{model_path}/logits.npz", logits=logits_all.detach().cpu().numpy())
+-+np.savez_compressed(f"{model_path}/logits.npz", logits=logits_all.detach().cpu().numpy())
+-\ No newline at end of file
+-diff --git a/src/modelling/llm/merge_and_save.py b/src/modelling/llm/merge_and_save.py
+-index b6f1bbf..307cd59 100644
+---- a/src/modelling/llm/merge_and_save.py
+-+++ b/src/modelling/llm/merge_and_save.py
+-@@ -2,67 +2,18 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaPreTrainedMod
+- import torch
+- from peft import PeftModel
+- from torch import nn
+-+from model import GemmaClassifier
+-+base_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-retrained"
+- 
+--base_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-1-epoch-pretrain"
+--
+--model = AutoModelForCausalLM.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct",
+-+model = AutoModelForCausalLM.from_pretrained("google/gemma-2-9b-it",
+-                                              torch_dtype=torch.float16, device_map="cuda:1", )
+--
+--model = PeftModel.from_pretrained(model, base_path)
+--model = model.merge_and_unload()
+--model.save_pretrained(f"{base_path}/merged")
+--tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct")
+--tokenizer.save_pretrained(f"{base_path}/merged")
+-+#model = GemmaClassifier(model).to("cuda:1")
+-+#model = PeftModel.from_pretrained(model, base_path)
+-+#model = model.merge_and_unload()
+-+#model.save_pretrained(f"{base_path}/merged")
+-+#tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-9b-it")
+-+#tokenizer.save_pretrained(f"{base_path}/merged")
+- 
+- # trial prompt
+--prompt = """"<|begin_of_text|><|start_header_id|>user<|end_header_id|>
+--
+--Please analyze the conversation below between a human and two language models which give both respectively give the response ###Response A and ###Response B. The models are each asked to respond to the same prompts which is indicated by ###Instruction:. 
+--After reviewing the responses from both models, please determine which is the  better responses overall - Response_a, Response_b, or was it a tie? 
+--###Instruction:: Is it morally right to try to have a certain percentage of females on managerial positions? 
+--###Response A: The question of whether it is morally right to aim for a certain percentage of females in managerial positions is a complex ethical issue that involves considerations of fairness, equality, diversity, and discrimination.
+--
+--Here are some arguments in favor of and against such policies:
+--
+--**Arguments in favor:**
+--
+--1. **Correcting Historical Inequities:** Women have historically been underrepresented in leadership roles due to various cultural, institutional, and social barriers. Aiming for a specific percentage can be seen as a corrective measure to address past and ongoing discrimination.
+--
+--2. **Promoting Diversity:** Diverse leadership teams can enhance decision-making and represent a broader range of perspectives. This can lead to better outcomes for organizations and society as a whole.
+--
+--3. **Equality of Opportunity:** Setting targets for female representation in management can help ensure that women have equal opportunities to advance in their careers.
+--
+--4. **Role Modeling:** Increased visibility of female leaders can inspire and encourage other women and girls to pursue leadership roles.
+--
+--**Arguments against:**
+--
+--1. **Reverse Discrimination:** Setting a quota for female representation might lead to the perception or reality of reverse discrimination, where men might be overlooked for positions despite being qualified, simply to meet the gender target.
+--
+--2. **Meritocracy Concerns:** Critics argue that employment and promotion should be based solely on merit and qualifications, not gender. They fear that quotas could compromise the quality of leadership if less qualified individuals are promoted to meet gender targets.
+--
+--3. **Tokenism:** There is a risk that women appointed to meet quotas might be seen as "tokens," undermining their legitimacy and potentially leading to resentment among colleagues.
+--
+--4. **Oversimplification of Diversity:** Focusing only on gender might overlook other important aspects of diversity, such as race, ethnicity, socioeconomic background, or sexual orientation.
+--
+--Ultimately, the morality of aiming for a certain percentage of females in managerial positions depends on one's ethical framework and the context in which such policies are implemented. Proponents of gender diversity targets often argue that these measures are necessary as a transitional mechanism to create a level playing field, while opponents may argue for a "color-blind" or "gender-blind" approach to hiring and promotions.
+--
+--Organizations and societies must carefully consider the implications of these strategies and strive to implement policies that promote fairness and equality while minimizing negative consequences. It is also important to address the root causes of gender inequality, such as unconscious bias, work-life balance challenges, and lack of supportive policies, to create an environment where everyone has the opportunity to succeed based on their capabilities and contributions. 
+--###Response B: As an AI, I don't have personal beliefs or opinions. However, I can tell you that the question of gender quotas in managerial positions is a complex one and positions can vary. Advocates argue that such measures can help correct historical imbalances, promote diversity, and may lead to better decision-making. Critics may argue that positions should be based purely on merit, and that quotas could potentially lead to tokenism or unqualified candidates being promoted. Morality can be subjective and differs from person to person based on their personal beliefs, cultural background, and values. It's a topic with valid arguments on both sides, and it's up to each individual or organization to decide what they believe is right.
+--###Instruction:: OK, does pineapple belong on a pizza? Relax and give me fun answer. 
+--###Response A: Ah, the age-old culinary conundrum that has divided nations and dinner tables: does pineapple belong on a pizza? The tropical twist of pineapple on pizza, known as Hawaiian pizza, is a hotly debated topic where taste buds battle and pizza purists protest.
+--
+--Let's slice into the debate with a zest of fun:
+--
+--**Team Pineapple:** "Absolutely, yes! Pineapple on pizza is like a beach party in your mouth. The sweet juiciness of pineapple chunks frolicking with savory ham or bacon creates a flavor wave that surfs across the cheesy ocean of deliciousness. It's the Mardi Gras of pizzas, where sweet meets savory in a jubilant jamboree!"
+--
+--**Team No-Pineapple:** "No way, not in a million pizzas! Pineapple is a fruit that should be sunbathing on a tropical fruit platter, not freeloading on a sacred slice of pizza. The thought of warm, melty cheese conspiring with pineapple's sugary mischief is enough to make Italian ancestors turn in their tomato patches. Keep the pineapple in the fruit salad where it belongs!"
+--
+--At the end of the day, whether pineapple belongs on pizza is a matter of personal taste. Some say it's a match made in heaven, others say it's a culinary crime. But let's face it, in the world of pizza toppings, where you can find everything from anchovies to zucchini, there's room for a little pineapple pizzazz. So, if your taste buds crave that sweet and tangy twist, go ahead and let your pineapple flag fly atop that glorious cheese-covered dough. Bon appÃ©tit, or as they say in pineapple paradise, "Aloha-ppetite!" ???? 
+--###Response B: As an AI, I don't eat, so I don't have personal preferences. But, in the world of pizza, the pineapple topping is a hotly debated topic! Some people love the sweet and savory mix it brings to a pizza, a flavor combination made famous by the Hawaiian pizza. Others firmly believe that the sweetness of the fruit has no place on a pizza. It's a pizza puzzle that might never be solved. So, whether pineapple belongs on a pizza or not, it truly depends on your taste buds!<|eot_id|><|start_header_id|>assistant<|end_header_id|>"""
+--
+--input_ids = tokenizer.encode(prompt, return_tensors="pt", truncation=True, max_length=4096)
+--
+--with torch.no_grad():
+--    input_ids = input_ids.to(model.device)
+--    output = model.generate(input_ids, max_length=8012, num_return_sequences=1, do_sample=False)
+--    print(tokenizer.decode(output[0]))
+-+model = GemmaClassifier.from_pretrained(model).to("cuda:1")
+-+model.from_pretrained()
+-\ No newline at end of file
+-diff --git a/src/modelling/llm/model.py b/src/modelling/llm/model.py
+-index 8316c6d..d3f697d 100644
+---- a/src/modelling/llm/model.py
+-+++ b/src/modelling/llm/model.py
+-@@ -4,7 +4,6 @@ from transformers import LlamaPreTrainedModel, MistralPreTrainedModel, Gemma2Pre
+- import torch.nn.functional as F
+- from modeling_internlm2 import InternLM2PreTrainedModel
+- 
+--
+- def mean_pooling(token_embeddings, attention_mask):
+-     input_mask_expanded = (
+-         attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+-@@ -57,7 +56,7 @@ class LLamaClassifier(LlamaPreTrainedModel):
+-         hidden_states = outputs['logits']
+-         hidden_states = mean_pooling(hidden_states, attention_mask).type(torch.bfloat16)
+- 
+--        return {"logits": self.linear_head(hidden_states), "hidden_states": hidden_states}
+-+        return {"logits": self.linear_head(hidden_states)}
+- 
+- 
+- class PhiClassifier(Phi3PreTrainedModel):
+-@@ -139,4 +138,4 @@ class GemmaClassifier(Gemma2PreTrainedModel):
+-         hidden_states = outputs['logits']
+-         hidden_states = mean_pooling(hidden_states, attention_mask).type(torch.bfloat16)
+- 
+--        return {"logits": self.linear_head(hidden_states), "hidden_states": hidden_states}
+-+        return {"logits": self.linear_head(hidden_states),}
+-diff --git a/src/modelling/llm/train.py b/src/modelling/llm/train.py
+-index ee43608..3c5b1ec 100644
+---- a/src/modelling/llm/train.py
+-+++ b/src/modelling/llm/train.py
+-@@ -3,7 +3,7 @@ import os
+- import warnings
+- 
+- import pandas as pd
+--import torch
+-+import torch.nn
+- from datasets import Dataset
+- from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model, TaskType
+- from transformers import AutoTokenizer, TrainingArguments, AutoModelForCausalLM, \
+-@@ -16,11 +16,11 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
+- CFG = {
+-     'seed': 42,
+-     'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
+--    'model_name': 'meta-llama/Meta-Llama-3-8B-Instruct',
+--    'max_len': 5000,
+-+    'model_name': 'google/gemma-2-9b-it',
+-+    'max_len': 2560,
+-     'batch_size': 1,
+-     'num_classes': 3,
+--    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-2-epoch-arcface-loss',
+-+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-2560-len',
+-     'epochs': 2,
+-     'lr': 4e-5,
+-     'mixed_precision': "bf16",
+-@@ -29,48 +29,20 @@ os.environ['WANDB_PROJECT'] = 'lmsys-winner'
+- 
+- 
+- class CustomTrainer(Trainer):
+--    def __init__(self, arcface_layer, *args, **kwargs):
+-+    def __init__(self, *args, **kwargs):
+-         super().__init__(*args, **kwargs)
+--        self.arcface = arcface_layer
+- 
+-     def compute_loss(self, model, inputs, return_outputs=False):
+-         labels = inputs.pop("targets").long()
+-         outputs = model(**inputs)
+-         logits = outputs.get('logits')
+--        hidden_states = outputs.get('hidden_states')
+- 
+-         # Cross-entropy loss
+--        ce_loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
+-+        loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
+- 
+-         # ArcFace loss
+--        arcface_logits = self.arcface(hidden_states, labels)
+--        arcface_loss = F.cross_entropy(arcface_logits, labels)
+--
+--        # Combined loss
+--        total_loss =   ce_loss + 0.05 * arcface_loss
+--        self.log({"ce_loss": ce_loss.item()})
+--        return (total_loss, outputs) if return_outputs else total_loss
+--
+--
+--class ArcFaceLayer(nn.Module):
+--    def __init__(self, in_features, out_features, s=30.0, m=0.50):
+--        super(ArcFaceLayer, self).__init__()
+--        self.in_features = in_features
+--        self.out_features = out_features
+--        self.s = s
+--        self.m = m
+--        self.weight = nn.Parameter(torch.FloatTensor(out_features, in_features)).cuda().type(torch.bfloat16)
+--        nn.init.xavier_uniform_(self.weight)
+--
+--    def forward(self, input, label):
+--        input = input.type(torch.bfloat16)
+--        label = label.type(torch.long)
+--        cosine = F.linear(F.normalize(input), F.normalize(self.weight))
+--        phi = cosine - self.m
+--        output = torch.where(torch.eq(label.unsqueeze(1), torch.arange(self.out_features).to(label.device)),
+--                             phi, cosine)
+--        output *= self.s
+--        return output
+-+
+-+        return (loss, outputs) if return_outputs else loss
+- 
+- 
+- def tokenize_function(examples, tokenizer, max_length):
+-@@ -132,11 +104,11 @@ def main(cfg):
+- 
+-     model = AutoModelForCausalLM.from_pretrained(cfg['model_name'], trust_remote_code=True,
+-                                                  torch_dtype=torch.bfloat16, quantization_config=quant_config,
+--                                                 attn_implementation="flash_attention_2")
+-+                                                 attn_implementation="eager")
+-     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+-     model.gradient_checkpointing_enable()
+-     model.config.use_cache = False
+--    model = LLamaClassifier(model, torch_dtype=torch.bfloat16)
+-+    model = GemmaClassifier(model, torch_dtype=torch.bfloat16)
+-     print("Linear layers: ", find_all_linear_names(model))
+-     peft_config = LoraConfig(
+-         r=64,
+-@@ -154,10 +126,9 @@ def main(cfg):
+-         param.requires_grad = True
+-     train_dataset = train_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']), num_proc=16)
+-     valid_dataset = valid_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']), num_proc=16)
+--    data_collator = DataCollatorWithPadding(tokenizer=tokenizer, )
+-+    data_collator = DataCollatorWithPadding(tokenizer=tokenizer, pad_to_multiple_of=8)
+-     train_dataset = train_dataset.remove_columns(["text"])
+-     valid_dataset = valid_dataset.remove_columns(["text"])
+--    arcface_layer = ArcFaceLayer(4096, cfg['num_classes'])
+-     trainer = CustomTrainer(
+-         model=model,
+-         args=training_args,
+-@@ -166,7 +137,6 @@ def main(cfg):
+-         data_collator=data_collator,
+-         compute_metrics=compute_metrics,
+-         eval_dataset=valid_dataset,
+--        arcface_layer=arcface_layer
+- 
+-     )
+- 
+-diff --git a/src/optimization/optuna_optimized.py b/src/optimization/optuna_optimized.py
+-index d2f519f..4eb4d7f 100644
+---- a/src/optimization/optuna_optimized.py
+-+++ b/src/optimization/optuna_optimized.py
+-@@ -1,28 +1,77 @@
+-+import pandas as pd
+- import numpy as np
+- import optuna
+--import pandas as pd
+- import torch
+- from sklearn.metrics import log_loss
+-+from transformers import AutoTokenizer
+- 
+--model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-3096-2-epoch-label-smoothing/"
+-+# Load and preprocess data
+-+df = pd.read_csv('/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv')
+-+pred_df = pd.read_csv('/home/mithil/PycharmProjects/lmsys-scoring/trial.csv')
+-+tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-9b-it")
+- 
+--logits = np.load(f"{model_path}/logits.npz")['logits']
+-+df['len'] = df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
+-+id_df_dict = dict(zip(df['id'], df['len']))
+-+pred_df['len'] = pred_df['id'].map(id_df_dict)
+-+pred_df['len_bin'] = pd.qcut(pred_df['len'], q=10)
+- 
+-+# Load model outputs
+-+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-2560-len/"
+-+logits = np.load(f"{model_path}/logits.npz")['logits']
+- labels = pd.read_csv(f"{model_path}/oof.csv")['label']
+- 
+-+# Assign bin to each sample
+-+bin_edges = pred_df['len_bin'].cat.categories
+-+sample_bins = pd.cut(pred_df['len'], bins=bin_edges)
+- 
+- def objective(trial):
+--    clip_value_max = trial.suggest_float("clip_value_max", 0.5, 1.0)
+--    clip_value_min = trial.suggest_float("clip_value_min", 0.0, 0.5)
+--    temperature = trial.suggest_float("temperature", 0.0, 2.0)
+--    logits_ = logits / temperature
+--    logits_ = torch.tensor(logits_).softmax(dim=-1).numpy().clip(clip_value_min, clip_value_max)
+--    loss = log_loss(labels, logits_, )
+-+    # Create a temperature for each bin
+-+    temperatures = {
+-+        bin_: trial.suggest_float(f"temperature_{i}", 0.1, 2.0)
+-+        for i, bin_ in enumerate(bin_edges)
+-+    }
+-+
+-+    # Apply temperature and clipping for each bin
+-+    adjusted_logits = []
+-+    for bin_, logits_bin in zip(sample_bins, logits):
+-+        temp = temperatures[bin_]
+-+        logits_bin = logits_bin / temp
+-+        probs = torch.tensor(logits_bin).softmax(dim=-1).numpy()
+-+        adjusted_logits.append(probs)
+-+
+-+    adjusted_logits = np.vstack(adjusted_logits)
+-+    loss = log_loss(labels, adjusted_logits)
+-     return loss
+- 
+-+# Create and run the study
+-+study = optuna.create_study(direction="minimize",)
+-+study.optimize(objective, n_trials=1000,show_progress_bar=True)
+-+
+-+# Print results
+-+print("Best parameters:", study.best_params)
+-+print("Best value:", study.best_value)
+-+
+-+# Calculate and print the baseline loss
+-+baseline_loss = log_loss(labels, torch.tensor(logits).softmax(dim=-1).numpy())
+-+print("Baseline loss:", baseline_loss)
+-+
+-+# Calculate average log loss for each bin using optimized parameters
+-+best_params = study.best_params
+-+
+-+binned_losses = []
+-+for bin_ in bin_edges:
+-+    bin_mask = (sample_bins == bin_)
+-+    bin_logits = logits[bin_mask]
+-+    bin_labels = labels[bin_mask]
+-+
+-+    temp = best_params[f'temperature_{list(bin_edges).index(bin_)}']
+-+    adjusted_logits = bin_logits / temp
+-+    probs = torch.tensor(adjusted_logits).softmax(dim=-1).numpy()
+-+
+-+    bin_loss = log_loss(bin_labels, probs)
+-+    binned_losses.append((bin_, bin_loss))
+- 
+--study = optuna.create_study(direction="minimize")
+--study.optimize(objective, n_trials=250)
+--print(study.best_params)
+--print(study.best_value)
+--print(log_loss(labels, torch.tensor(logits).softmax(dim=-1).numpy()))
+-\ No newline at end of file
+-+# Print the results
+-+print("\nAverage Log Loss for each length bin after optimization:")
+-+for bin_, loss in binned_losses:
+-+    print(f"Bin {bin_}: Average Log Loss = {loss:.4f}")
+-\ No newline at end of file

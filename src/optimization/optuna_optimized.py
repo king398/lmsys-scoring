@@ -13,7 +13,7 @@ tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-9b-it")
 df['len'] = df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
 id_df_dict = dict(zip(df['id'], df['len']))
 pred_df['len'] = pred_df['id'].map(id_df_dict)
-pred_df['len_bin'] = pd.qcut(pred_df['len'], q=10)
+pred_df['len_bin'] = pd.qcut(pred_df['len'], q=15)
 
 # Load model outputs
 model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-2560-len/"
@@ -27,7 +27,7 @@ sample_bins = pd.cut(pred_df['len'], bins=bin_edges)
 def objective(trial):
     # Create a temperature for each bin
     temperatures = {
-        bin_: trial.suggest_float(f"temperature_{i}", 0.1, 2.0)
+        bin_: trial.suggest_float(f"temperature_{i}", 0.5, 1.5)
         for i, bin_ in enumerate(bin_edges)
     }
 

@@ -56,7 +56,10 @@ lmsys_data_extra['prompt'] = lmsys_data_extra['prompt'].apply(string_to_list)
 lmsys_data_extra['response_a'] = lmsys_data_extra['response_a'].apply(string_to_list)
 lmsys_data_extra['response_b'] = lmsys_data_extra['response_b'].apply(string_to_list)
 lmsys_data_extra['text'] = lmsys_data_extra.apply(create_text, axis=1)
+lmsys_data_extra = lmsys_data_extra[(lmsys_data_extra['model_a'].isin(df['model_a'])) & (lmsys_data_extra['model_b'].isin(df['model_b']))]
+#print(lmsys_data_extra)
 df = pd.concat([df, lmsys_data_extra], ignore_index=True)
+
 
 df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_extra.csv", index=False, encoding='utf-8',
           errors='replace')
