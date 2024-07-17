@@ -3,7 +3,7 @@ import numpy as np
 from sklearn.metrics import log_loss
 
 df = pd.read_csv(
-    "/home/mithil/PycharmProjects/lmsys-scoring/models/Meta-Llama-3-8B-Instruct-3096-2-epoch-label-smoothing/oof.csv")
+    "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-2560-len/oof.csv")
 lgbm_preds = np.load("/home/mithil/PycharmProjects/lmsys-scoring/data/valid_preds_lgb_tfidf.npy")
 llama_preds = df[['A', 'B', 'tie']].values
 
@@ -19,3 +19,4 @@ for weight in weights:
         best_weights = weight
 
 print(f"Best weight: {best_weights:.3f}, Best loss: {best_loss:.5f}")
+print(f" Baseline loss: {log_loss(df['label'], llama_preds)}")

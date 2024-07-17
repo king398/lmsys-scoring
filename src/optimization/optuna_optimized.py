@@ -45,7 +45,7 @@ def objective(trial):
 
 # Create and run the study
 study = optuna.create_study(direction="minimize",)
-study.optimize(objective, n_trials=1000,show_progress_bar=True)
+study.optimize(objective, n_trials=1,show_progress_bar=True)
 
 # Print results
 print("Best parameters:", study.best_params)

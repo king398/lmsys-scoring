@@ -17,12 +17,12 @@ CFG = {
     'seed': 42,
     'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_extra.csv',
     'model_name': 'google/gemma-2-9b-it',
-    'max_len': 3096,
+    'max_len': 2560,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-3096-extra-data',
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-2560-extra-data-kl-divergence',
     'epochs': 2,
-    'lr': 4e-5,
+    'lr': 2e-4,
     'mixed_precision': "bf16",
 }
 os.environ['WANDB_PROJECT'] = 'lmsys-winner'
@@ -34,12 +34,14 @@ class CustomTrainer(Trainer):
 
     def compute_loss(self, model, inputs, return_outputs=False):
         labels = inputs.pop("targets").long()
+        logits_labels = inputs.pop("logits")
         outputs = model(**inputs)
         logits = outputs.get('logits')
 
         # Cross-entropy loss
         loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
-
+        kl_loss = F.kl_div(F.log_softmax(logits, dim=-1), F.softmax(logits_labels, dim=-1), reduction='batchmean')
+        loss = loss * 0.9 + kl_loss * 0.1
         # ArcFace loss
 
         return (loss, outputs) if return_outputs else loss
@@ -63,8 +65,10 @@ def main(cfg):
     train_df['len'] = train_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
     valid_df = df[(df['fold'] == fold)].reset_index(drop=True)
     valid_df['len'] = valid_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
-    train_dataset = Dataset.from_dict({"text": train_df['text'], "targets": train_df['label']})
-    valid_dataset = Dataset.from_dict({"text": valid_df['text'], "targets": valid_df['label']})
+    train_dataset = Dataset.from_dict(
+        {"text": train_df['text'], "targets": train_df['label'], 'logits': train_df[['A_log', 'B_log', 'tie_log']].values})
+    valid_dataset = Dataset.from_dict(
+        {"text": valid_df['text'], "targets": valid_df['label'], 'logits': valid_df[['A_log', 'B_log', 'tie_log']].values})
     tokenizer.padding_side = "right"
 
     training_args = TrainingArguments(
@@ -92,7 +96,7 @@ def main(cfg):
         metric_for_best_model="log_loss",
         label_names=["targets"],
         per_device_eval_batch_size=1,
-
+        save_steps=500
 
     )
 
@@ -109,7 +113,7 @@ def main(cfg):
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     model.gradient_checkpointing_enable()
     model.config.use_cache = False
-    model = GemmaClassifier(model, torch_dtype=torch.bfloat16)
+    model = LLamaClassifier(model, torch_dtype=torch.bfloat16)
     print("Linear layers: ", find_all_linear_names(model))
     peft_config = LoraConfig(
         r=64,
@@ -138,7 +142,6 @@ def main(cfg):
         data_collator=data_collator,
         compute_metrics=compute_metrics,
         eval_dataset=valid_dataset,
-
 
     )
 

@@ -33,13 +33,13 @@ class AttentionPooling(nn.Module):
 
 
 class LLamaClassifier(LlamaPreTrainedModel):
-    def __init__(self, model, **kwargs):
+    def __init__(self, model,torch_dtype, **kwargs):
         super().__init__(config=model.config, **kwargs)
         self.model = model
         self.model.lm_head = nn.Identity()
         self.linear_head = nn.Linear(model.config.hidden_size, 3)
 
-        self.dtype_linear = torch.bfloat16
+        self.dtype_linear = torch_dtype
 
     @staticmethod
     def mean_pooling(token_embeddings, attention_mask):

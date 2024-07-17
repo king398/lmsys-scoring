@@ -70,5 +70,9 @@ for batch in tqdm(dataloader):
 
 hidden_states_all = hidden_states_all.type(torch.float16).cpu().numpy()
 labels = np.array(labels)
-np.save("../../../data/hidden_states_train_gemma.npy", hidden_states_all)
-np.save("../../../data/labels_train.npy", labels)
+if eval:
+    np.save("../../../data/embeddings/hidden_states_valid_gemma.npy", hidden_states_all)
+    np.save("../../../data/labels_valid.npy", labels)
+else:
+    np.save("../../../data/embeddings/hidden_states_train_gemma.npy", hidden_states_all)
+    np.save("../../../data/embeddings/labels_train.npy", labels)

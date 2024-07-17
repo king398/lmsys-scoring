@@ -56,10 +56,17 @@ lmsys_data_extra['prompt'] = lmsys_data_extra['prompt'].apply(string_to_list)
 lmsys_data_extra['response_a'] = lmsys_data_extra['response_a'].apply(string_to_list)
 lmsys_data_extra['response_b'] = lmsys_data_extra['response_b'].apply(string_to_list)
 lmsys_data_extra['text'] = lmsys_data_extra.apply(create_text, axis=1)
-lmsys_data_extra = lmsys_data_extra[(lmsys_data_extra['model_a'].isin(df['model_a'])) & (lmsys_data_extra['model_b'].isin(df['model_b']))]
-#print(lmsys_data_extra)
+lmsys_data_extra = lmsys_data_extra[
+    (lmsys_data_extra['model_a'].isin(df['model_a'])) & (lmsys_data_extra['model_b'].isin(df['model_b']))]
+# print(lmsys_data_extra)
 df = pd.concat([df, lmsys_data_extra], ignore_index=True)
 
+# drop duplicates
+df = df.drop_duplicates(subset=['text'], keep='first')
 
+df_logits = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_preds_lgb.csv", encoding='utf-8')
+df_logits['id']  = df_logits['id'].astype(str)
+df['id'] = df['id'].astype(str)
+df = pd.merge(df, df_logits, on=['id'], how='left')
 df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_extra.csv", index=False, encoding='utf-8',
           errors='replace')
