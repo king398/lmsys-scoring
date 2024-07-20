@@ -88,13 +88,14 @@ class PhiClassifier(Phi3PreTrainedModel):
 
 
 class MistralClassifier(MistralPreTrainedModel):
-    def __init__(self, model, **kwargs):
+    def __init__(self, model, dtype_linear=torch.bfloat16, return_features=False, **kwargs):
         super().__init__(config=model.config, **kwargs)
         self.model = model
         self.model.lm_head = nn.Identity()
         self.linear_head = nn.Linear(model.config.hidden_size, 3)
 
-        self.dtype_linear = torch.bfloat16
+        self.dtype_linear = dtype_linear
+        self.return_features = return_features
 
     @staticmethod
     def mean_pooling(token_embeddings, attention_mask):
@@ -109,9 +110,12 @@ class MistralClassifier(MistralPreTrainedModel):
     def forward(self, input_ids, attention_mask, **kwargs):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
         hidden_states = outputs['logits']
-        hidden_states = mean_pooling(hidden_states, attention_mask).type(torch.bfloat16)
+        hidden_states = mean_pooling(hidden_states, attention_mask).type(self.dtype_linear)
 
-        return {"logits": self.linear_head(hidden_states)}
+        if self.return_features:
+            return {"logits": self.linear_head(hidden_states), "features": hidden_states}
+        else:
+            return {"logits": self.linear_head(hidden_states)}
 
 
 class GemmaClassifier(Gemma2PreTrainedModel):

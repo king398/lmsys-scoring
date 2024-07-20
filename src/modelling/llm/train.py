@@ -20,7 +20,7 @@ CFG = {
     'max_len': 2560,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-2560-extra-data-kl-divergence',
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-2560-extra-data-2e-4-lr',
     'epochs': 2,
     'lr': 2e-4,
     'mixed_precision': "bf16",
@@ -40,8 +40,6 @@ class CustomTrainer(Trainer):
 
         # Cross-entropy loss
         loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
-        kl_loss = F.kl_div(F.log_softmax(logits, dim=-1), F.softmax(logits_labels, dim=-1), reduction='batchmean')
-        loss = loss * 0.9 + kl_loss * 0.1
         # ArcFace loss
 
         return (loss, outputs) if return_outputs else loss

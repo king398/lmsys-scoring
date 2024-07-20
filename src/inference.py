@@ -2,7 +2,7 @@ import torch
 import pandas as pd
 import gc
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, DataCollatorWithPadding, \
-    Gemma2PreTrainedModel
+    MistralPreTrainedModel
 from tqdm.notebook import tqdm
 from torch.utils.data import DataLoader, Dataset
 from threading import Thread, Lock
@@ -126,7 +126,7 @@ def run_inference(dataset, tokenizer, model, device, results, index, ids_list):
         ids_list[index] = ids
 
 
-class GemmaClassifier(Gemma2PreTrainedModel):
+class GemmaClassifier(MistralPreTrainedModel):
     def __init__(self, model, device, **kwargs):
         super().__init__(config=model.config, **kwargs)
         self.model = model
@@ -172,15 +172,15 @@ def main(cfg):
 
     model_1 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.float16,
                                                    device_map="cuda:0", trust_remote_code=True,
-                                                   quantization_config=bnb_config, attn_implementation="eager", )
+                                                   quantization_config=bnb_config,  )
     model_1 = GemmaClassifier(model_1, "cuda:0")
-    model_1.load_adapter(cfg['adapter_path'])
+    #model_1.load_adapter(cfg['adapter_path'])
 
     model_2 = AutoModelForCausalLM.from_pretrained(cfg['model_path'], torch_dtype=torch.float16,
                                                    device_map="cuda:1", trust_remote_code=True,
-                                                   quantization_config=bnb_config, attn_implementation="eager", )
+                                                   quantization_config=bnb_config,  )
     model_2 = GemmaClassifier(model_2, "cuda:1")
-    model_2.load_adapter(cfg['adapter_path'])
+    #model_2.load_adapter(cfg['adapter_path'])
 
     tokenizer.pad_token = tokenizer.eos_token
 
@@ -257,11 +257,11 @@ def main(cfg):
 
 
 cfg = {
-    "model_path": "/kaggle/input/gemma-9b-2",
+    "model_path": "mistralai/Mistral-Nemo-Instruct-2407",
     "adapter_path": "/kaggle/input/gemma-2-9b-it-smoothing-2560-len",
     "max_len": 1536,
     "test_csv": "/kaggle/input/lmsys-chatbot-arena/train.csv",
-    "batch_size": 6,
+    "batch_size": 4,
 }
 
 if __name__ == "__main__":
