@@ -29,7 +29,7 @@ label_to_response = {0: 'A', 1: 'B', 2: 'tie'}
 
 
 def create_text(row):
-    text = f""""""
+    text = f"""Which one of the chatbots below did a better job responding to the user request? Or were they tied?"""
 
     for prompt, response_a, response_b in zip(row['prompt'], row['response_a'], row['response_b']):
         text += f"Instruction:\n{prompt}\n\nResponse A:\n{response_a}\n\nResponse B:\n{response_b}\n\n"
@@ -44,7 +44,7 @@ df['text'] = df.apply(create_text, axis=1)
 # Add a column indicating the row is not swapped
 
 
-skf = StratifiedKFold(n_splits=4, shuffle=True, random_state=42)
+skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 for fold, (train_index, test_index) in enumerate(skf.split(df, df['label'])):
     df.loc[test_index, 'fold'] = fold
 

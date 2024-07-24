@@ -11,9 +11,10 @@ pred_df = pd.read_csv('/home/mithil/PycharmProjects/lmsys-scoring/trial.csv')
 tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-9b-it")
 
 df['len'] = df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
+print("total tokens:", df['len'].sum())
 id_df_dict = dict(zip(df['id'], df['len']))
 pred_df['len'] = pred_df['id'].map(id_df_dict)
-pred_df['len_bin'] = pd.qcut(pred_df['len'], q=15)
+pred_df['len_bin'] = pd.qcut(pred_df['len'], q=50)
 
 # Load model outputs
 model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-2560-len/"
@@ -59,17 +60,19 @@ print("Baseline loss:", baseline_loss)
 best_params = study.best_params
 
 binned_losses = []
+bin_mean = []
 for bin_ in bin_edges:
     bin_mask = (sample_bins == bin_)
     bin_logits = logits[bin_mask]
     bin_labels = labels[bin_mask]
 
-    temp = best_params[f'temperature_{list(bin_edges).index(bin_)}']
+    temp = 1
     adjusted_logits = bin_logits / temp
     probs = torch.tensor(adjusted_logits).softmax(dim=-1).numpy()
 
     bin_loss = log_loss(bin_labels, probs)
-    binned_losses.append((bin_, bin_loss))
+    binned_losses.append( bin_loss)
+    bin_mean.append(bin_.mid)
 
 # Print the results
 print("\nAverage Log Loss for each length bin after optimization:")

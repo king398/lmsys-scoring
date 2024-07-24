@@ -15,15 +15,16 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 CFG = {
     'seed': 42,
-    'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_extra.csv',
-    'model_name': 'google/gemma-2-9b-it',
-    'max_len': 2560,
+    'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
+    'model_name': 'meta-llama/Meta-Llama-3.1-8B-Instruct',
+    'max_len': 3096,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-2560-extra-data-2e-4-lr',
-    'epochs': 2,
-    'lr': 2e-4,
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/llama-3096-8b-3.1-no-smooth',
+    'epochs':2 ,
+    'lr': 4e-5,
     'mixed_precision': "bf16",
+    'gradient_accumulation_steps': 16,
 }
 os.environ['WANDB_PROJECT'] = 'lmsys-winner'
 
@@ -34,12 +35,12 @@ class CustomTrainer(Trainer):
 
     def compute_loss(self, model, inputs, return_outputs=False):
         labels = inputs.pop("targets").long()
-        logits_labels = inputs.pop("logits")
         outputs = model(**inputs)
         logits = outputs.get('logits')
 
         # Cross-entropy loss
-        loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
+        loss = F.cross_entropy(logits, labels, label_smoothing=
+                               0.1)
         # ArcFace loss
 
         return (loss, outputs) if return_outputs else loss
@@ -64,9 +65,9 @@ def main(cfg):
     valid_df = df[(df['fold'] == fold)].reset_index(drop=True)
     valid_df['len'] = valid_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
     train_dataset = Dataset.from_dict(
-        {"text": train_df['text'], "targets": train_df['label'], 'logits': train_df[['A_log', 'B_log', 'tie_log']].values})
+        {"text": train_df['text'], "targets": train_df['label']})
     valid_dataset = Dataset.from_dict(
-        {"text": valid_df['text'], "targets": valid_df['label'], 'logits': valid_df[['A_log', 'B_log', 'tie_log']].values})
+        {"text": valid_df['text'], "targets": valid_df['label']})
     tokenizer.padding_side = "right"
 
     training_args = TrainingArguments(
@@ -75,8 +76,8 @@ def main(cfg):
         bf16=True,
         output_dir=cfg['model_dir'],
         gradient_checkpointing=True,
-        gradient_accumulation_steps=16,
-        save_strategy="epoch",
+        gradient_accumulation_steps=cfg['gradient_accumulation_steps'],
+        save_strategy="steps",
         overwrite_output_dir=True,
         learning_rate=float(cfg['lr']),
         optim="adamw_8bit",
@@ -85,29 +86,31 @@ def main(cfg):
         dataloader_num_workers=8,
         dataloader_pin_memory=True,
         lr_scheduler_type="cosine",
-        warmup_ratio=0.1,
-        weight_decay=0.01,
+        warmup_steps=20,
         save_safetensors=True,
         run_name=cfg['model_dir'].split("/")[-1],
         remove_unused_columns=False,
-        eval_strategy="epoch",
+        eval_strategy="steps",
         metric_for_best_model="log_loss",
         label_names=["targets"],
         per_device_eval_batch_size=1,
-        save_steps=500
+        save_steps=300,
+        eval_steps=300,
+        load_best_model_at_end=True,
+
 
     )
 
     quant_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_compute_dtype=torch.bfloat16,
         bnb_4bit_use_double_quant=False,
     )
 
     model = AutoModelForCausalLM.from_pretrained(cfg['model_name'], trust_remote_code=True,
                                                  torch_dtype=torch.bfloat16, quantization_config=quant_config,
-                                                 attn_implementation="eager")
+                                                 attn_implementation="flash_attention_2")
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     model.gradient_checkpointing_enable()
     model.config.use_cache = False

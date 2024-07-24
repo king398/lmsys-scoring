@@ -1,4 +1,4 @@
-from transformers import AutoTokenizer, AutoModelForCausalLM, Gemma2PreTrainedModel, BitsAndBytesConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaPreTrainedModel, BitsAndBytesConfig
 import pandas as pd
 import torch
 from tqdm import tqdm
@@ -11,8 +11,8 @@ from utils import string_to_list
 from torch import nn
 from src.modelling.llm.data import prepare_input
 
-model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-smoothing-3096-0-05-smoothing"
-model_name = "google/gemma-2-9b-it"
+model_path = "/home/mithil/PycharmProjects/lmsys-scoring/models/llama-3096-8b-3.1-no-smooth"
+model_name = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
     bnb_4bit_quant_type="nf4",
@@ -23,8 +23,9 @@ bnb_config = BitsAndBytesConfig(
 model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16,
                                              device_map="cuda:1",
                                              trust_remote_code=True,
-                                             attn_implementation="eager",)
+                                             attn_implementation="eager", )
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+
 
 def mean_pooling(token_embeddings, attention_mask):
     input_mask_expanded = (
@@ -34,19 +35,21 @@ def mean_pooling(token_embeddings, attention_mask):
         input_mask_expanded.sum(1), min=1e-9
     )
 
-class GemmaClassifier(Gemma2PreTrainedModel):
+
+class GemmaClassifier(LlamaPreTrainedModel):
     def __init__(self, model, **kwargs):
         super().__init__(config=model.config, **kwargs)
         self.model = model
         self.model.lm_head = nn.Identity()
         self.linear_head = nn.Linear(model.config.hidden_size, 3).to("cuda:1")
 
-    def forward(self, tensors):
-        outputs = self.model(**tensors, return_dict=True)
+    def forward(self, inputs):
+        outputs = self.model(**inputs, return_dict=True)
         hidden_states = outputs['logits']
-        hidden_states = mean_pooling(hidden_states, tensors['attention_mask']).type(torch.float16)
+        hidden_states = mean_pooling(hidden_states, inputs['attention_mask']).type(torch.float16)
 
         return {"logits": self.linear_head(hidden_states)}
+
 
 model = GemmaClassifier(model).to("cuda:1")
 model.load_adapter(model_path)
@@ -61,6 +64,7 @@ df['response_b'] = df['response_b'].apply(string_to_list)
 
 tokenizer.pad_token = tokenizer.eos_token
 
+
 class EvalDataset(Dataset):
     def __init__(self, df, tokenizer):
         self.text = df['text']
@@ -73,6 +77,7 @@ class EvalDataset(Dataset):
     def __getitem__(self, idx):
         return {"text": self.text[idx], "label": self.label[idx]}
 
+
 df['text'] = df.apply(prepare_input, axis=1, args=(tokenizer,))
 dataset = EvalDataset(df, tokenizer)
 dataloader = DataLoader(dataset, batch_size=None, num_workers=8, pin_memory=True)
@@ -83,7 +88,7 @@ predictions_all = []
 labels = []
 logits_all = None
 for batch in tqdm(dataloader):
-    inputs = tokenizer.encode_plus(batch['text'], max_length=2560,truncation=True,return_tensors="pt")
+    inputs = tokenizer.encode_plus(batch['text'], max_length=2560, truncation=True, return_tensors="pt")
     for k, v in inputs.items():
         inputs[k] = v.to("cuda:1")
     with torch.no_grad() and torch.cuda.amp.autocast():

@@ -4,7 +4,7 @@ from sklearn.model_selection import StratifiedKFold
 import ast
 import transformers
 
-tokenizer = transformers.AutoTokenizer.from_pretrained('meta-llama/Meta-Llama-3-8B-instruct')
+tokenizer = transformers.AutoTokenizer.from_pretrained('google/gemma-2-9b-it')
 # Load the CSV file with explicit encoding declaration
 df = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train.csv", encoding='utf-8')
 
@@ -65,8 +65,14 @@ df = pd.concat([df, lmsys_data_extra], ignore_index=True)
 df = df.drop_duplicates(subset=['text'], keep='first')
 
 df_logits = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_preds_lgb.csv", encoding='utf-8')
-df_logits['id']  = df_logits['id'].astype(str)
+df_logits['id'] = df_logits['id'].astype(str)
 df['id'] = df['id'].astype(str)
 df = pd.merge(df, df_logits, on=['id'], how='left')
+openai_extra = pd.read_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/openai_convo_data.csv", encoding='utf-8')
+openai_extra['prompt'] = openai_extra['prompt'].apply(string_to_list)
+openai_extra['response_a'] = openai_extra['response_a'].apply(string_to_list)
+openai_extra['response_b'] = openai_extra['response_b'].apply(string_to_list)
+openai_extra['text'] = openai_extra.apply(create_text, axis=1)
+df = pd.concat([df, openai_extra], ignore_index=True)
 df.to_csv("/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama_extra.csv", index=False, encoding='utf-8',
           errors='replace')
