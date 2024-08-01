@@ -8,3 +8,5 @@ data/
 /src/retrieval/index_infos.json
 /vllm
 /gemma-2-9b
+
+*.safetensors

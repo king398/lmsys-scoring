@@ -33,11 +33,12 @@ class AttentionPooling(nn.Module):
 
 
 class LLamaClassifier(LlamaPreTrainedModel):
-    def __init__(self, model,torch_dtype, **kwargs):
+    def __init__(self, model, torch_dtype, **kwargs):
         super().__init__(config=model.config, **kwargs)
         self.model = model
         self.model.lm_head = nn.Identity()
-        self.linear_head = nn.Linear(model.config.hidden_size, 3)
+        self.linear_head = nn.Linear(model.config.hidden_size, 3584)
+        self.linear_head_2 = nn.Linear(3584, 3)
 
         self.dtype_linear = torch_dtype
 
@@ -55,8 +56,9 @@ class LLamaClassifier(LlamaPreTrainedModel):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
         hidden_states = outputs['logits']
         hidden_states = mean_pooling(hidden_states, attention_mask).type(torch.bfloat16)
+        hidden_states = self.linear_head(hidden_states)
 
-        return {"logits": self.linear_head(hidden_states)}
+        return {"logits": self.linear_head_2(hidden_states), "features": hidden_states}
 
 
 class PhiClassifier(Phi3PreTrainedModel):

@@ -1,189 +1,215 @@
 import os
-import torch
-import pandas as pd
+import copy
+from dataclasses import dataclass
+
 import numpy as np
+import pandas as pd
+import torch
 from datasets import Dataset
-from scipy.special import softmax
-from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import log_loss, accuracy_score
 from transformers import (
-    AutoTokenizer, EvalPrediction, Trainer, TrainingArguments,
-    DataCollatorForSeq2Seq, Gemma2PreTrainedModel, Gemma2Model
+    BitsAndBytesConfig,
+    LlamaForSequenceClassification,
+    LlamaTokenizerFast,
+    PreTrainedTokenizerBase,
+    EvalPrediction,
+    Trainer,
+    TrainingArguments,
+    DataCollatorWithPadding,
 )
-from transformers.modeling_outputs import CausalLMOutputWithPast
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, TaskType
-import torch.nn as nn
-# Configuration
-cfg = {
-    'wandb_project': 'lmsys-winner',
-    'train_csv': "data/train_folds_llama.csv",
-    'model_path': "unsloth/gemma-2-9b-it-bnb-4bit",
-    'max_length': 1536,
-    'target_columns': ['winner_model_a', 'winner_model_b', 'winner_tie'],
-    'columns_to_vectorize': ["prompt", "response_a", "response_b"],
-    'output_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-next-token',
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-next-token'
-}
+from sklearn.metrics import log_loss, accuracy_score
+import random
+# import groupkfold
+from sklearn.model_selection import StratifiedKFold
 
-os.environ['WANDB_PROJECT'] = cfg['wandb_project']
+os.environ['WANDB_PROJECT'] = 'lmsys-winner'
 
-def load_and_preprocess_data(csv_path, columns_to_vectorize, target_columns):
-    df = pd.read_csv(csv_path)
-    df['label'] = df[target_columns].idxmax(axis=1)
-    label_encoder = LabelEncoder()
-    df['label'] = label_encoder.fit_transform(df['label'])
-    return df[columns_to_vectorize + ['label', 'fold']]
 
-def setup_tokenizer(model_path):
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-    tokenizer.add_eos_token = True
-    tokenizer.padding_side = 'right'
-    tokenizer.pad_token = tokenizer.eos_token
-    return tokenizer
+@dataclass
+class Config:
+    output_dir: str = "output"
+    checkpoint: str = "meta-llama/Meta-Llama-3-8B-Instruct"  # 4-bit quantized gemma-2-9b-instruct
+    max_length: int = 4096
+    n_splits: int = 5
+    fold_idx: int = 1
+    optim_type: str = "adamw_torch"
+    per_device_train_batch_size: int = 1
+    gradient_accumulation_steps: int = 8  # global batch size is 8
+    per_device_eval_batch_size: int = 1
+    n_epochs: int = 2
+    freeze_layers: int = 16  # there're 42 layers in total, we don't add adapters to the first 16 layers
+    lr: float = 4e-5
+    warmup_steps: int = 20
+    lora_r: int = 16
+    lora_alpha: float = lora_r * 2
+    lora_dropout: float = 0.05
+    lora_bias: str = "none"
 
-def tokenize_function(example, tokenizer, max_length, label_ids):
-    prompt = eval(example['prompt'], {"null": ['']})
-    response_a = eval(example['response_a'], {"null": ['']})
-    response_b = eval(example['response_b'], {"null": ['']})
 
-    text = "Which one of the chatbots below did a better job responding to the user request? Or were they tied? \n"
-    text += "~~~~~~~~~~ CONVERSATION WITH BOT A ~~~~~~~~~~\n"
-    text += "".join([f"""### User: "{p}" ### Bot A Response: "{r}""" for p, r in zip(prompt, response_a)])
-    text += "\n~~~~~~~~~~ CONVERSATION WITH BOT B ~~~~~~~~~~\n"
-    text += "".join([f"""### User: "{p}" ### Bot B Response: "{r}""" for p, r in zip(prompt, response_b)])
-    text += "\n ### BEST RESPONSE: "
+config = Config()
 
-    label_token_id = label_ids[int(example['label'])]
-    input_ids = tokenizer(text, add_special_tokens=False)["input_ids"]
+training_args = TrainingArguments(
+    output_dir=f"Meta-Llama-3.1-8B-Instruct-bnb-4bit_fold{config.fold_idx}_{config.max_length}_lowerlr_quantize",
+    overwrite_output_dir=True,
+    report_to="wandb",
+    num_train_epochs=config.n_epochs,
+    per_device_train_batch_size=config.per_device_train_batch_size,
+    gradient_accumulation_steps=config.gradient_accumulation_steps,
+    per_device_eval_batch_size=config.per_device_eval_batch_size,
+    logging_steps=10,
+    eval_strategy="epoch",
+    save_strategy="steps",
+    save_steps=200,
+    optim=config.optim_type,
+    fp16=True,
+    learning_rate=config.lr,
+    warmup_steps=config.warmup_steps,
+)
 
-    if len(input_ids) >= max_length - 2 - len([label_token_id]):
-        input_ids = input_ids[:max_length - 2 - len([label_token_id])]
 
-    input_ids = [tokenizer.bos_token_id] + input_ids + [label_token_id] + [tokenizer.eos_token_id]
-    attention_mask = [1] * len(input_ids)
-    labels = [-100] * (len(input_ids) - 2) + [label_token_id, tokenizer.eos_token_id]
+def find_all_linear_names(model):
+    cls = torch.nn.Linear
+    lora_module_names = set()
+    for name, module in model.named_modules():
+        if isinstance(module, cls):
+            names = name.split('.')
+            lora_module_names.add(names[0] if len(names) == 1 else names[-1])
 
-    return {
-        "input_ids": input_ids,
-        "attention_mask": attention_mask,
-        "labels": labels
-    }
+    if 'linear_head' in lora_module_names:  # needed for 16-bit
+        lora_module_names.remove('linear_head')
+    if "lm_head" in lora_module_names:
+        lora_module_names.remove("lm_head")
+    if 'linear_head_2' in lora_module_names:  # needed for 16-bit
+        lora_module_names.remove('linear_head_2')
 
-def load_dataset(df, tokenizer, max_length, label_ids):
-    dataset = Dataset.from_pandas(df)
-    return dataset.map(
-        lambda example: tokenize_function(example, tokenizer, max_length, label_ids),
-        remove_columns=dataset.column_names
-    )
+    return list(lora_module_names)
 
-def compute_metrics(pred):
-    logits, labels = pred
-    preds = logits.argmax(axis=-1)
-    label_tokens_ids = np.array(LABEL_IDS)
-    index_mapping = {value.item(): idx for idx, value in enumerate(label_tokens_ids)}
-    labels = labels[np.isin(labels, label_tokens_ids)]
-    labels = np.array([index_mapping[label.item()] for label in labels])
-    acc = accuracy_score(labels, preds)
-    probs = softmax(logits, axis=-1)
-    log_loss_value = log_loss(labels, probs)
-    return {'accuracy': acc, 'log_loss': log_loss_value}
 
-class Gemma2ForSFT(Gemma2PreTrainedModel):
-    _tied_weights_keys = ["lm_head.weight"]
+tokenizer = LlamaTokenizerFast.from_pretrained(config.checkpoint)
+tokenizer.add_eos_token = True
+tokenizer.padding_side = "right"
+tokenizer.pad_token = tokenizer.eos_token
+quant_config = BitsAndBytesConfig(load_in_4bit=True,
+                                  bnb_4bit_quant_type="nf4",
+                                  bnb_4bit_compute_dtype=torch.bfloat16,
+                                  bnb_4bit_use_double_quant=False,
+                                  )
+model = LlamaForSequenceClassification.from_pretrained(
+    config.checkpoint,
+    num_labels=3,
+    torch_dtype=torch.float16,
+    # device_map="auto",
+    attn_implementation="flash_attention_2",
+    quantization_config=quant_config,
+)
+model.config.use_cache = False
 
-    def __init__(self, config):
-        super().__init__(config)
-        self.model = Gemma2Model(config)
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-        self.post_init()
+lora_config = LoraConfig(
+    r=64,
+    lora_alpha=128,
+    lora_dropout=0.05,
+    bias="none",
+    target_modules=find_all_linear_names(model),
+    task_type=TaskType.SEQ_CLS,
+    modules_to_save=["linear_head", ],
+)
 
-    def forward(self, input_ids=None, attention_mask=None, position_ids=None, past_key_values=None,
-                inputs_embeds=None, labels=None, use_cache=None, output_attentions=None,
-                output_hidden_states=None, return_dict=None, cache_position=None):
-        outputs = self.model(
-            input_ids, attention_mask, position_ids, past_key_values, inputs_embeds,
-            use_cache, output_attentions, output_hidden_states, return_dict, cache_position
-        )
-        hidden_states = outputs[0]
-        logits = self.lm_head(hidden_states).float()
+model = prepare_model_for_kbit_training(model)
+model = get_peft_model(model, lora_config)
+model
 
-        loss = None
-        if labels is not None:
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-            loss_fct = nn.CrossEntropyLoss()
+model.print_trainable_parameters()
+df = pd.read_csv("data/train_folds_llama.csv")
+df_add = pd.read_csv("data/lmsys-33k-deduplicated.csv")
+df['id'] = df['id'].astype('str')
 
-            label_tokens_ids = torch.tensor(LABEL_IDS).to(self.device)
-            index_mapping = {value.item(): idx for idx, value in enumerate(label_tokens_ids)}
-            true_labels = shift_labels[torch.isin(shift_labels, label_tokens_ids)]
-            true_labels = torch.tensor([index_mapping[label.item()] for label in true_labels]).to(self.device)
-            true_logits = shift_logits[torch.isin(shift_labels, label_tokens_ids)][:, label_tokens_ids].to(self.device)
-            print(true_logits,true_labels)
-            loss = loss_fct(true_logits, true_labels)
+sgkf = StratifiedKFold(n_splits=5)
+for fold, (_, val) in enumerate(sgkf.split(df, df['label'])):
+    df.loc[val, "fold"] = int(fold)
 
-        return CausalLMOutputWithPast(loss=loss, logits=true_logits)
+# Concatenate dataframes
+train_df = df[df['fold'] != config.fold_idx].reset_index(drop=True)
+common_columns = df.columns.intersection(df_add.columns)
+train_df = train_df[common_columns]
+df_add = df_add[common_columns]
+train_df = pd.concat([train_df, df_add], axis=0).reset_index(drop=True)
+print(train_df)
+valid_df = df[df['fold'] == config.fold_idx].reset_index(drop=True)
+valid_df = valid_df[common_columns]
+train_ds = Dataset.from_pandas(train_df)
+valid_ds = Dataset.from_pandas(valid_df)
 
-def setup_model(model_path):
-    peft_config = LoraConfig(
-        r=16, lora_alpha=32, lora_dropout=0.05, bias='none',
-        task_type=TaskType.CAUSAL_LM, target_modules=['q_proj', 'k_proj', 'v_proj'],
-        inference_mode=False
-    )
-    model = Gemma2ForSFT.from_pretrained(model_path, torch_dtype=torch.bfloat16, load_in_4bit=True,device_map="auto")
-    model.config.use_cache = False
-    model = prepare_model_for_kbit_training(model)
-    model = get_peft_model(model, peft_config)
-    model.gradient_checkpointing_enable()
-    return model
 
-def main():
-    df = load_and_preprocess_data(cfg['train_csv'], cfg['columns_to_vectorize'], cfg['target_columns'])
-    tokenizer = setup_tokenizer(cfg['model_path'])
+class CustomTokenizer:
+    def __init__(
+            self,
+            tokenizer: PreTrainedTokenizerBase,
+            max_length: int
+    ) -> None:
+        self.tokenizer = tokenizer
+        self.max_length = max_length
 
-    global LABEL_IDS
-    LABEL_IDS = [tokenizer(i, add_special_tokens=False)["input_ids"][0] for i in ['a', 'b', 'tie']]
+    def __call__(self, batch: dict) -> dict:
+        if random.random() > 0.5:
+            prompt = ["<prompt>: " + self.process_text(t) for t in batch["prompt"]]
+            response_a = ["\n\n<response_a>: " + self.process_text(t) for t in batch["response_a"]]
+            response_b = ["\n\n<response_b>: " + self.process_text(t) for t in batch["response_b"]]
+            texts = [p + r_a + r_b for p, r_a, r_b in zip(prompt, response_a, response_b)]
+            tokenized = self.tokenizer(texts, max_length=self.max_length, truncation=True, padding="do_not_pad")
+            labels = []
+            for a_win, b_win in zip(batch["winner_model_a"], batch["winner_model_b"]):
+                if a_win:
+                    label = 0
+                elif b_win:
+                    label = 1
+                else:
+                    label = 2
+                labels.append(label)
+            return {**tokenized, "labels": labels}
+        else:
+            # i want to swap response_a and response_b and corresponding labels
+            prompt = ["<prompt>: " + self.process_text(t) for t in batch["prompt"]]
+            response_a = ["\n\n<response_a>: " + self.process_text(t) for t in batch["response_b"]]
+            response_b = ["\n\n<response_b>: " + self.process_text(t) for t in batch["response_a"]]
+            texts = [p + r_b + r_a for p, r_a, r_b in zip(prompt, response_a, response_b)]
+            tokenized = self.tokenizer(texts, max_length=self.max_length, truncation=True, padding="do_not_pad")
+            labels = []
+            for a_win, b_win in zip(batch["winner_model_a"], batch["winner_model_b"]):
+                if a_win:
+                    label = 1
+                elif b_win:
+                    label = 0
+                else:
+                    label = 2
+                labels.append(label)
+            return {**tokenized, "labels": labels}
 
-    train_ds = load_dataset(df[df['fold'] != 0], tokenizer, cfg['max_length'], LABEL_IDS)
-    eval_ds = load_dataset(df[df['fold'] == 0], tokenizer, cfg['max_length'], LABEL_IDS)
+    @staticmethod
+    def process_text(text: str) -> str:
+        return " ".join(eval(text, {"null": ""}))
 
-    model = setup_model(cfg['model_path'])
-    model.print_trainable_parameters()
 
-    training_args = TrainingArguments(
-        output_dir=cfg['output_dir'],
-        overwrite_output_dir=True,
-        evaluation_strategy="steps",
-        save_strategy="steps",
-        save_steps=5000,
-        save_total_limit=1,
-        logging_strategy="steps",
-        logging_steps=10,
-        warmup_steps=20,
-        optim="adamw_8bit",
-        learning_rate=2e-4,
-        per_device_train_batch_size=1,
-        per_device_eval_batch_size=4,
-        gradient_accumulation_steps=4,
-        num_train_epochs=2,
-        bf16=True,
-        metric_for_best_model="log_loss",
-        greater_is_better=False,
-        report_to="wandb",
-        eval_steps=5000,
-        load_best_model_at_end=True,
-        run_name=cfg['model_dir'].split("/")[-1],
-    )
+encode = CustomTokenizer(tokenizer, max_length=config.max_length)
+train_ds = train_ds.map(encode, batched=True)
+valid_ds = valid_ds.map(encode, batched=True)
 
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_ds,
-        eval_dataset=eval_ds,
-        data_collator=DataCollatorForSeq2Seq(tokenizer=tokenizer),
-        compute_metrics=compute_metrics,
-    )
 
-    trainer.train()
+def compute_metrics(eval_preds: EvalPrediction) -> dict:
+    preds = eval_preds.predictions
+    labels = eval_preds.label_ids
+    probs = torch.from_numpy(preds).float().softmax(-1).numpy()
+    loss = log_loss(y_true=labels, y_pred=probs)
+    acc = accuracy_score(y_true=labels, y_pred=preds.argmax(-1))
+    return {"acc": acc, "log_loss": loss}
 
-if __name__ == '__main__':
-    main()
+
+trainer = Trainer(
+    args=training_args,
+    model=model,
+    tokenizer=tokenizer,
+    train_dataset=train_ds,
+    eval_dataset=valid_ds,
+    compute_metrics=compute_metrics,
+    data_collator=DataCollatorWithPadding(tokenizer=tokenizer, pad_to_multiple_of=8),
+)
+trainer.train()

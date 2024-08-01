@@ -7,15 +7,16 @@ import numpy as np
 
 @dataclass
 class Config:
-    gemma_dir = '/kaggle/input/gemma-finetuning-all/gemma-2-9b/'
-    max_length = 1536
+    gemma_dir = '/kaggle/input/gemma-finetuning-all/gemma-2-27b/'
+    max_length =  1024
 
 
 cfg = Config()
 
 llm = vllm.LLM(
     cfg.gemma_dir,
-    gpu_memory_utilization=0.95,
+    gpu_memory_utilization=0.9,
+    quantization="gptq",
     trust_remote_code=True,
     dtype="half",
     enforce_eager=True,
@@ -23,10 +24,11 @@ llm = vllm.LLM(
     tensor_parallel_size=2,
     distributed_executor_backend="mp",
 
+
 )
 tokenizer = llm.get_tokenizer()
 
-test = pd.read_csv('/kaggle/input/lmsys-chatbot-arena/train.csv')[:25000]
+test = pd.read_csv('/kaggle/input/lmsys-chatbot-arena/train.csv')[:200]
 
 
 def process_text(text: str) -> str:
@@ -56,17 +58,9 @@ data['input_ids'] = data['text'].apply(
     lambda x: tokenizer(x, truncation=True, max_length=cfg.max_length, padding=False)['input_ids'])
 data['text'] = data['input_ids'].apply(lambda x: tokenizer.decode(x, skip_special_tokens=True))
 data['len'] = data['input_ids'].apply(len)
-data = data.sort_values('len', ascending=False)
+#data = data.sort_values('len', ascending=False)
 data['id'] = test['id']
 
-aug_data = pd.DataFrame()
-aug_data['text'] = tokenize(test['prompt'], test['response_b'], test['response_a'])
-aug_data['input_ids'] = aug_data['text'].apply(
-    lambda x: tokenizer(x, truncation=True, max_length=cfg.max_length, padding=False)['input_ids'])
-aug_data['len'] = aug_data['input_ids'].apply(len)
-aug_data = aug_data.sort_values('len', ascending=False)
-aug_data['text'] = aug_data['input_ids'].apply(lambda x: tokenizer.decode(x, skip_special_tokens=True))
-aug_data['id'] = test['id']
 data_embeddings = []
 embeddings = llm.encode(
     data['text'].values, vllm.SamplingParams(), use_tqdm=True
@@ -77,22 +71,7 @@ for i, embed in enumerate(embeddings):
 
 data_embeddings = np.array(data_embeddings)
 data_embeddings = np.array(torch.tensor(data_embeddings).softmax(dim=-1))
-aug_data_embeddings = []
-embeddings = llm.encode(
-    aug_data['text'].values, vllm.SamplingParams(), use_tqdm=True
-)
-for i, embed in enumerate(embeddings):
-    aug_data_embeddings.append(embed.outputs.embedding)
-aug_data_embeddings = np.array(aug_data_embeddings)
-aug_data_embeddings = np.array(torch.tensor(aug_data_embeddings).softmax(dim=-1))
 
-probs = []
-for i in range(len(data_embeddings)):
-    aug_data_probs = aug_data_embeddings[i]
-    aug_data_probs[0], aug_data_probs[1] = aug_data_probs[1], aug_data_probs[0]
-    data_probs = data_embeddings[i]
-    prob = data_probs * 0.5 + aug_data_probs * 0.5
-    probs.append(prob)
-submission = pd.DataFrame(probs, columns=['winner_model_a', 'winner_model_b', 'winner_tie'])
+submission = pd.DataFrame(data_embeddings, columns=['winner_model_a', 'winner_model_b', 'winner_tie'])
 submission['id'] = data['id']
 submission.to_csv('submission.csv', index=False)

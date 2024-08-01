@@ -2,6 +2,7 @@ import gc
 import os
 import warnings
 
+import numpy as np
 import pandas as pd
 import torch.nn
 from datasets import Dataset
@@ -16,15 +17,16 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 CFG = {
     'seed': 42,
     'train_csv': '/home/mithil/PycharmProjects/lmsys-scoring/data/train_folds_llama.csv',
-    'model_name': 'meta-llama/Meta-Llama-3.1-8B-Instruct',
+    'model_name': 'unsloth/Meta-Llama-3.1-8B-bnb-4bit',
     'max_len': 3096,
     'batch_size': 1,
     'num_classes': 3,
-    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/llama-3096-8b-3.1-no-smooth',
-    'epochs':2 ,
+    'model_dir': '/home/mithil/PycharmProjects/lmsys-scoring/models/gemma-2-9b-it-bnb-4bit-training',
+    'epochs': 2,
     'lr': 4e-5,
     'mixed_precision': "bf16",
     'gradient_accumulation_steps': 16,
+    "embedding_path": "/home/mithil/PycharmProjects/lmsys-scoring/data/embeddings/hidden_states.npy"
 }
 os.environ['WANDB_PROJECT'] = 'lmsys-winner'
 
@@ -35,14 +37,15 @@ class CustomTrainer(Trainer):
 
     def compute_loss(self, model, inputs, return_outputs=False):
         labels = inputs.pop("targets").long()
+        embeddings = inputs.pop("embeddings")
         outputs = model(**inputs)
         logits = outputs.get('logits')
-
+        hidden_states = outputs.get('features')
         # Cross-entropy loss
-        loss = F.cross_entropy(logits, labels, label_smoothing=
-                               0.1)
+        loss = F.cross_entropy(logits, labels)
         # ArcFace loss
-
+        cosine_loss = F.cosine_embedding_loss(hidden_states, embeddings, torch.ones(logits.shape[0]).to(logits.device))
+        loss = loss + cosine_loss * 0.1
         return (loss, outputs) if return_outputs else loss
 
 
@@ -57,6 +60,8 @@ def main(cfg):
 
     gc.enable()
     df = pd.read_csv(cfg['train_csv'])
+    embeddings = np.load(cfg['embedding_path'])
+    df['embeddings'] = embeddings.tolist()
     fold = 0
     train_df = df[df['fold'] != fold].reset_index(drop=True)
     tokenizer = AutoTokenizer.from_pretrained(cfg['model_name'], add_eos_token=True, trust_remote_code=True)
@@ -65,9 +70,9 @@ def main(cfg):
     valid_df = df[(df['fold'] == fold)].reset_index(drop=True)
     valid_df['len'] = valid_df['text'].apply(lambda x: len(tokenizer(x)['input_ids']))
     train_dataset = Dataset.from_dict(
-        {"text": train_df['text'], "targets": train_df['label']})
+        {"text": train_df['text'], "targets": train_df['label'], "embeddings": train_df['embeddings']})
     valid_dataset = Dataset.from_dict(
-        {"text": valid_df['text'], "targets": valid_df['label']})
+        {"text": valid_df['text'], "targets": valid_df['label'], "embeddings": valid_df['embeddings']})
     tokenizer.padding_side = "right"
 
     training_args = TrainingArguments(
@@ -98,38 +103,35 @@ def main(cfg):
         eval_steps=300,
         load_best_model_at_end=True,
 
-
     )
 
     quant_config = BitsAndBytesConfig(
         load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
+        bnb_4bit_quant_type="fp4",
         bnb_4bit_compute_dtype=torch.bfloat16,
         bnb_4bit_use_double_quant=False,
     )
 
     model = AutoModelForCausalLM.from_pretrained(cfg['model_name'], trust_remote_code=True,
-                                                 torch_dtype=torch.bfloat16, quantization_config=quant_config,
-                                                 attn_implementation="flash_attention_2")
+                                                 torch_dtype=torch.bfloat16,
+                                                 quantization_config=quant_config,
+                                                 attn_implementation="flash_attention_2", )
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     model.gradient_checkpointing_enable()
     model.config.use_cache = False
-    model = LLamaClassifier(model, torch_dtype=torch.bfloat16)
     print("Linear layers: ", find_all_linear_names(model))
     peft_config = LoraConfig(
-        r=64,
-        lora_alpha=128,
+        r=32,
+        lora_alpha=64,
         lora_dropout=0.05,
         bias="none",
         target_modules=find_all_linear_names(model),
         task_type=TaskType.SEQ_CLS,
-        modules_to_save=["linear_head", ],
+        modules_to_save=["linear_head_1", "linear_head_2"],
     )
-
+    model = LLamaClassifier(model, torch.bfloat16)
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
-    for name, param in model.linear_head.named_parameters():
-        param.requires_grad = True
     train_dataset = train_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']), num_proc=16)
     valid_dataset = valid_dataset.map(lambda x: tokenize_function(x, tokenizer, cfg['max_len']), num_proc=16)
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer, pad_to_multiple_of=8)
